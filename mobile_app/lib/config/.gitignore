@@ -1,0 +1,68 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+dist/
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*credentials*.json
+
+# IDE and logs
+.vscode/
+.idea/
+*.log
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node.js
+node_modules/
+dist/
+.npm/
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+build/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Credentials and private files
+*credentials*.json
+*secret*
+*private*
+
+# Logs
+*.log
+replay_pid*
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
