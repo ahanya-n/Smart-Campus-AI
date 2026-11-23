@@ -53,6 +53,10 @@ test('lists the existing collection names without accessing MongoDB', () => {
     'events',
     'transport_routes',
     'notifications',
+    'lost_found_items',
+    'lost_found_matches',
+    'lost_found_claims',
+    'assignments',
   ]);
 });
 

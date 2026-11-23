@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE_URL, apiRequest } from './api'
 import ComplaintsPage from './ComplaintsPage'
+import LostAndFoundPage from './LostAndFoundPage'
 import { canBorrowLibraryBook, validateBookForm } from './library'
 import { filterStudentRecords, paginateStudentRecords } from './studentDirectory'
 import {
@@ -9,6 +10,12 @@ import {
   validateTransportAssignment,
   validateTransportRoute,
 } from './transport'
+import {
+  availableAssistantModes,
+  calculateStudyStreak,
+  safeAssistantSourceUrl,
+  validateAssistantFile,
+} from './assistant'
 import './Portal.css'
 
 const NAV_ITEMS = [
@@ -21,8 +28,11 @@ const NAV_ITEMS = [
   ['library', 'Library', 'LB', ['student', 'faculty', 'admin']],
   ['transport', 'Transport', 'TR', ['student', 'faculty', 'admin']],
   ['complaints', 'Complaints', 'CM', ['student', 'admin']],
+  ['lost-found', 'Lost and Found', 'LF', ['student', 'admin']],
   ['notifications', 'Notifications', 'NO', ['student', 'faculty', 'admin']],
   ['assistant', 'Campus assistant', 'AI', ['student', 'faculty']],
+  ['mood-check-in', 'Mood check-in', 'MC', ['student']],
+  ['mood-insights', 'Wellbeing insights', 'WI', ['faculty', 'admin']],
   ['intelligence', 'Academic intelligence', 'AC', ['faculty', 'admin']],
   ['admin', 'Administration', 'AD', ['admin']],
 ]
@@ -66,7 +76,11 @@ function Loading({ label = 'Loading data…' }) {
 }
 
 function ErrorMessage({ error }) {
-  return error ? <div className="alert error" role="alert">{error}</div> : null
+  if (!error) return null
+  const message = typeof error === 'string'
+    ? error
+    : error?.message || 'The request could not be completed.'
+  return <div className="alert error" role="alert">{message}</div>
 }
 
 function Empty({ children }) {
@@ -96,7 +110,6 @@ function transportFormFromRoute(route) {
     capacity: String(route.capacity),
   }
 }
-
 function transportPayload(form) {
   return {
     route_number: form.route_number.trim(),
@@ -331,20 +344,39 @@ function DashboardPage({ profile, health, setPage, data, busy, error }) {
   const summary = data?.attendance?.summary
   const hasAttendanceData = summary?.total_classes > 0
   const schedule = data?.timetable?.entries || []
+  const dashboard = data?.studentDashboard
+  const dashboardProfile = dashboard?.profile || profile
+  const dashboardAttendance = dashboard?.attendance || summary
+  const attendancePercentage = dashboardAttendance?.percentage
+    ?? (hasAttendanceData ? dashboardAttendance?.attendance_percentage : null)
+  const todayEntries = dashboard?.timetable?.entries || schedule
+  const upcomingAssignments = dashboard?.assignments?.upcoming || []
+  const notifications = dashboard?.notifications || []
+  const marks = dashboard?.marks || []
+  const subjectPerformance = new Map()
+  for (const mark of marks) {
+    const score = Number(mark.score)
+    const maxScore = Number(mark.max_score)
+    if (!mark.subject_code || !Number.isFinite(score) || !Number.isFinite(maxScore) || maxScore <= 0) continue
+    const values = subjectPerformance.get(mark.subject_code) || []
+    values.push((score / maxScore) * 100)
+    subjectPerformance.set(mark.subject_code, values)
+  }
+  const performanceRows = [...subjectPerformance.entries()].map(([code, values]) => ({
+    code,
+    name: marks.find((mark) => mark.subject_code === code)?.subject_name || code,
+    value: Math.round(values.reduce((sum, value) => sum + value, 0) / values.length),
+  })).slice(0, 6)
+  const firstName = dashboardProfile.name?.trim().split(/\s+/)[0] || 'Student'
+  const dateLabel = new Intl.DateTimeFormat(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  }).format(new Date())
   return (
     <>
-      <section className="welcome-panel">
-        <div>
-          <p className="eyebrow">CAMPUS WORKSPACE</p>
-          <h1>Welcome, {profile.name || 'Campus user'}</h1>
-          <p>Your {profile.role} workspace is connected to the Express API.</p>
-        </div>
-        <span className={`status-badge ${health === 'online' ? 'good' : 'muted-badge'}`}>
-          <i /> API {health === 'online' ? 'online' : 'unavailable'}
-        </span>
-      </section>
       <ErrorMessage error={error} />
-      {!busy && profile.role === 'student' && !profile.student_id && (
+      {!busy && profile.role === 'student' && !dashboardProfile.student_id && (
         <section className="panel action-panel" aria-labelledby="link-profile-heading">
           <span className="icon-tile">PR</span>
           <div>
@@ -355,16 +387,133 @@ function DashboardPage({ profile, health, setPage, data, busy, error }) {
         </section>
       )}
       {busy ? <Loading /> : profile.role === 'student' ? (
-        <section className="metric-grid" aria-label="Attendance overview">
-          <Metric
-            label="Attendance"
-            value={hasAttendanceData ? `${summary.attendance_percentage}%` : summary ? 'Insufficient Data' : '—'}
-            detail={data?.attendance?.is_demo ? 'Synthetic demo data' : 'Official attendance'}
-          />
-          <Metric label="Classes attended" value={hasAttendanceData ? summary.present_classes : '—'} />
-          <Metric label="Total classes" value={hasAttendanceData ? summary.total_classes : '—'} />
-          <Metric label="Subjects" value={hasAttendanceData ? summary.subject_count : '—'} />
-        </section>
+        <div className="student-dashboard">
+          <section className="student-welcome">
+            <div className="student-welcome-copy">
+              <p className="eyebrow">STUDENT WORKSPACE</p>
+              <h1>Good morning, {firstName} <span aria-hidden="true">☀</span></h1>
+              <p>{dateLabel} · Semester {dashboardProfile.semester || '—'}</p>
+            </div>
+            <div className="student-profile-compact">
+              <div className="profile-avatar">{firstName.slice(0, 1).toUpperCase()}</div>
+              <div>
+                <strong>{dashboardProfile.name || profile.name || 'Student'}</strong>
+                <span>{dashboardProfile.roll_number || dashboardProfile.student_id || 'Roll number unavailable'}</span>
+              </div>
+            </div>
+            <span className={`status-badge ${health === 'online' ? 'good' : 'muted-badge'}`}>
+              <i /> API {health === 'online' ? 'online' : 'unavailable'}
+            </span>
+          </section>
+
+          <section className="student-focus-banner">
+            <div>
+              <p>MAKE TODAY A STEP FORWARD</p>
+              <h2>{todayEntries.length > 0 ? `${todayEntries.length} classes and ${dashboard?.assignments?.pending || 0} assignment(s) due.` : 'Plan today’s study time.'}</h2>
+              <span>{todayEntries.length > 0 ? 'Review your schedule and keep the day moving.' : 'No classes are listed for today.'}</span>
+            </div>
+            <div className="focus-orb" aria-hidden="true">SC</div>
+          </section>
+
+          <section className="student-kpi-grid" aria-label="Student academic overview">
+            <article className="student-kpi-card">
+              <span>Attendance</span>
+              <strong>{attendancePercentage == null ? '—' : `${attendancePercentage}%`}</strong>
+              <small>{dashboard?.is_demo ? 'Synthetic demo data' : 'Official attendance'}</small>
+            </article>
+            <article className="student-kpi-card">
+              <span>CGPA</span>
+              <strong>{dashboard?.cgpa == null ? '—' : dashboard.cgpa}</strong>
+              <small>Calculated demo equivalent</small>
+            </article>
+            <article className="student-kpi-card">
+              <span>Assignments</span>
+              <strong>{dashboard?.assignments?.pending ?? '—'}</strong>
+              <small>{dashboard?.assignments?.submitted ?? 0} submitted</small>
+            </article>
+            <article className="student-kpi-card">
+              <span>Study streak</span>
+              <strong>{dashboard?.study_streak ?? 0} days</strong>
+              <small>Recent present records</small>
+            </article>
+          </section>
+
+          <div className="student-dashboard-grid">
+            <section className="student-dashboard-card">
+              <div className="section-heading">
+                <div><p className="eyebrow">TODAY</p><h2>Today’s timetable</h2></div>
+                <button className="text-button" onClick={() => setPage('timetable')} type="button">View all</button>
+              </div>
+              {todayEntries.length === 0 ? (
+                <Empty>No classes are available today.</Empty>
+              ) : (
+                <div className="student-timetable-list">
+                  {todayEntries.map((entry, index) => (
+                    <article className="student-timetable-row" key={`${entry.subject_code}-${entry.start_time}-${index}`}>
+                      <div className="time-marker"><strong>{entry.start_time}</strong><span>{entry.end_time}</span></div>
+                      <div><strong>{entry.subject_name}</strong><span>{entry.faculty_name || 'Faculty unavailable'} · {entry.room_number || 'Room unavailable'}</span></div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="student-dashboard-card">
+              <div className="section-heading">
+                <div><p className="eyebrow">PERFORMANCE</p><h2>Subject performance</h2></div>
+              </div>
+              {performanceRows.length === 0 ? (
+                <Empty>No marks are available for this student.</Empty>
+              ) : (
+                <div className="student-performance-chart">
+                  {performanceRows.map((row) => (
+                    <div className="student-performance-row" key={row.code}>
+                      <div><span>{row.name}</span><strong>{row.value}%</strong></div>
+                      <div className="performance-track"><span style={{ width: `${Math.max(0, Math.min(100, row.value))}%` }} /></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="student-dashboard-card">
+              <div className="section-heading">
+                <div><p className="eyebrow">ASSIGNMENTS</p><h2>Upcoming work</h2></div>
+              </div>
+              {upcomingAssignments.length === 0 ? (
+                <Empty>No upcoming assignments.</Empty>
+              ) : (
+                <div className="student-assignment-list">
+                  {upcomingAssignments.map((assignment, index) => (
+                    <article key={`${assignment.subject_code}-${assignment.title}-${index}`}>
+                      <div><strong>{assignment.title}</strong><span>{assignment.subject_name || assignment.subject_code}</span></div>
+                      <time>{assignment.due_date ? new Date(assignment.due_date).toLocaleDateString() : 'No due date'}</time>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="student-dashboard-card">
+              <div className="section-heading">
+                <div><p className="eyebrow">UPDATES</p><h2>Notifications</h2></div>
+                <button className="text-button" onClick={() => setPage('notifications')} type="button">View all</button>
+              </div>
+              {notifications.length === 0 ? (
+                <Empty>No notifications.</Empty>
+              ) : (
+                <div className="student-notification-list">
+                  {notifications.slice(0, 4).map((notice, index) => (
+                    <article key={`${notice.title}-${index}`}>
+                      <strong>{notice.title}</strong>
+                      <span>{notice.message}</span>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
       ) : (
         <section className="metric-grid" aria-label="Campus overview">
           {profile.role === 'admin' ? (
@@ -630,7 +779,7 @@ function TimetablePage({ profile, data, busy, error, reload }) {
   )
 }
 
-function NotificationsPage({ profile, data, busy, error, reload }) {
+function NotificationsPage({ profile, data, busy, error, reload, openLostFoundClaim }) {
   const [notice, setNotice] = useState('')
   const [actionError, setActionError] = useState('')
   const [checking, setChecking] = useState(false)
@@ -665,7 +814,6 @@ function NotificationsPage({ profile, data, busy, error, reload }) {
   return (
     <>
       <ErrorMessage error={error || actionError} />
-      {report?.is_demo && <div className="alert success" role="status">DEMO DATA: synthetic class records are shown for this seeded Faculty account.</div>}
       {notice && <div className="alert success" role="status">{notice}</div>}
       {busy ? <Loading /> : profile.role === 'student' ? (
         <>
@@ -674,8 +822,15 @@ function NotificationsPage({ profile, data, busy, error, reload }) {
             <div className="notification-list">
               {data.notifications.map((item) => (
                 <article className={`notification-card ${item.is_read ? 'read' : ''}`} key={item.id}>
-                  <div><span className="notification-meta">{item.week_id} · {displayDate(item.reporting_date)}</span><h2>{item.title}</h2><p>{item.message}</p></div>
-                  {!item.is_read && <button className="button secondary small" onClick={() => markRead(item.id)} type="button">Mark as read</button>}
+                  <div><span className="notification-meta">{item.week_id || 'Notification'} · {displayDate(item.reporting_date || item.created_at?.slice(0, 10))}</span><h2>{item.title}</h2><p>{item.message}</p></div>
+                  <div className="notification-actions">
+                    {item.action_type === 'lost_found_claim' && (
+                      <button className="button primary small" onClick={() => openLostFoundClaim(item.claim_id)} type="button">
+                        {item.claim_id ? 'Review claim' : 'Review requests'}
+                      </button>
+                    )}
+                    {!item.is_read && <button className="button secondary small" onClick={() => markRead(item.id)} type="button">Mark as read</button>}
+                  </div>
                 </article>
               ))}
             </div>
@@ -972,6 +1127,7 @@ function AdminPage({ data, busy, error, reload }) {
       await reload()
     } catch (requestError) {
       setActionError(requestError.message)
+      if (mode === 'study') setStudyUploading(false)
     } finally {
       setWorking(false)
     }
@@ -1355,20 +1511,193 @@ function AcademicIntelligencePage({ data, busy, error, profile }) {
   )
 }
 
+function MoodCheckInPage({ busy, data, error, reload, token }) {
+  const [mood, setMood] = useState('neutral')
+  const [reflection, setReflection] = useState('')
+  const [working, setWorking] = useState(false)
+  const [actionError, setActionError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [urgentSupport, setUrgentSupport] = useState(false)
+  const [selfCareSuggestions, setSelfCareSuggestions] = useState([])
+  const checkIns = data?.check_ins || []
+
+  async function submit(event) {
+    event.preventDefault()
+    setWorking(true)
+    setActionError('')
+    setNotice('')
+    setUrgentSupport(false)
+    try {
+      const result = await apiRequest('/assistant/mood/check-ins', {
+        method: 'POST',
+        token,
+        body: { mood, reflection: reflection.trim() },
+      })
+      setReflection('')
+      setNotice(result.support_message || 'Your private check-in was saved.')
+      setSelfCareSuggestions(result.self_care_suggestions || [])
+      setUrgentSupport(result.urgent_support === true || result.risk_level === 'urgent')
+      await reload()
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  return (
+    <section className="panel mood-page">
+      <p className="eyebrow">PRIVATE WELLBEING</p>
+      <h2>Mood check-in</h2>
+      <p className="muted">This is a private, optional reflection separate from Assistant conversations. It is not a diagnosis.</p>
+      <ErrorMessage error={error || actionError} />
+      {notice && <div className={`alert ${urgentSupport ? 'error' : 'success'}`} role={urgentSupport ? 'alert' : 'status'}>{notice}</div>}
+      {selfCareSuggestions.length > 0 && (
+        <section className="mood-support-list" aria-label="Optional self-care suggestions">
+          <strong>Optional next steps</strong>
+          <ul>{selfCareSuggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}</ul>
+        </section>
+      )}
+      {busy ? <Loading label="Loading your private check-ins…" /> : (
+        <>
+          <form className="form-grid mood-form" onSubmit={submit}>
+            <label>How are you feeling?
+              <select onChange={(event) => setMood(event.target.value)} value={mood}>
+                {['very_good', 'good', 'neutral', 'low', 'very_low'].map((value) => (
+                  <option key={value} value={value}>
+                    {value === 'very_good' ? 'Very good'
+                      : value === 'very_low' ? 'Very low'
+                        : value[0].toUpperCase() + value.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="mood-reflection">Optional private reflection
+              <textarea maxLength="2000" onChange={(event) => setReflection(event.target.value)} rows="4" value={reflection} />
+            </label>
+            <button className="button primary" disabled={working} type="submit">{working ? 'Saving…' : 'Save private check-in'}</button>
+          </form>
+          <h3>Your recent check-ins</h3>
+          {checkIns.length ? (
+            <div className="mood-history">
+              {checkIns.map((entry) => (
+                <article className="mood-entry" key={entry.id || entry.created_at}>
+                  <div><strong>{entry.mood || entry.sentiment || 'Check-in'}</strong><small>{displayDate(entry.created_at)}</small></div>
+                  {entry.reflection && <p>{entry.reflection}</p>}
+                  {entry.sentiment && <small>Language signal: {entry.sentiment}{entry.score != null ? ` · ${entry.score}%` : ''}</small>}
+                  {entry.support_message && <p className="mood-support">{entry.support_message}</p>}
+                  {entry.self_care_suggestions?.length > 0 && <ul>{entry.self_care_suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}</ul>}
+                </article>
+              ))}
+            </div>
+          ) : <Empty>No check-ins yet. Your history is private to your account.</Empty>}
+        </>
+      )}
+    </section>
+  )
+}
+
+function MoodInsightsPage({ busy, data, error }) {
+  const minimum = data?.minimum_group_size || 5
+  const groups = (data?.groups || []).filter((group) => group.count >= minimum)
+  return (
+    <section className="panel mood-page">
+      <p className="eyebrow">AGGREGATE WELLBEING</p>
+      <h2>Campus wellbeing trends</h2>
+      <p className="muted">Only group-level counts are shown. Individual check-ins and reflections are never available here. Trends are not diagnoses.</p>
+      <ErrorMessage error={error} />
+      {busy ? <Loading label="Loading anonymous aggregate trends…" /> : data?.suppressed ? (
+        <Empty>Trends are hidden until a group reaches at least {minimum} check-ins.</Empty>
+      ) : groups.length ? (
+        <div className="mood-groups">
+          {groups.map((group) => (
+            <article className="mood-entry" key={`${group.department || 'campus'}-${group.semester || 'all'}`}>
+              <div>
+                <strong>{group.department || 'Campus'}{group.semester ? ` · Semester ${group.semester}` : ''}</strong>
+                <small>{group.count} check-ins</small>
+              </div>
+              <ul>
+                {Object.entries(group.sentiment_counts || {}).map(([sentiment, count]) => (
+                  <li key={sentiment}>{sentiment}: {count}</li>
+                ))}
+              </ul>
+            </article>
+          ))}
+        </div>
+      ) : <Empty>No sufficiently large aggregate groups are available yet.</Empty>}
+    </section>
+  )
+}
+
 function AssistantPage({ data, busy, error, reload, profile }) {
+  const [referenceTime] = useState(() => Date.now())
+  const historyRef = useRef(null)
+  const [mode, setMode] = useState('general')
   const [message, setMessage] = useState('')
   const [actionError, setActionError] = useState('')
   const [day, setDay] = useState('')
   const [freeTime, setFreeTime] = useState(null)
   const [working, setWorking] = useState(false)
+  const [conversationId, setConversationId] = useState('')
+  const [conversations, setConversations] = useState([])
+  const [listening, setListening] = useState(false)
+  const [lastFailedRequest, setLastFailedRequest] = useState(null)
+  const [pendingConfirmation, setPendingConfirmation] = useState(null)
+  const [placementPractice, setPlacementPractice] = useState(null)
+  const [placementAnswer, setPlacementAnswer] = useState('')
+  const [placementTopic, setPlacementTopic] = useState('Java')
+  const [placementDifficulty, setPlacementDifficulty] = useState('beginner')
+  const [studyDocument, setStudyDocument] = useState(null)
+  const [studyActivities, setStudyActivities] = useState([])
+  const [selectedStudyFile, setSelectedStudyFile] = useState(null)
+  const [studyUploading, setStudyUploading] = useState(false)
+  const [studyAnalyzing, setStudyAnalyzing] = useState(false)
+  const [studyAnalysis, setStudyAnalysis] = useState(null)
+  const [studyQuiz, setStudyQuiz] = useState([])
+  const [studyQuizIndex, setStudyQuizIndex] = useState(0)
+  const [studyQuizScore, setStudyQuizScore] = useState(0)
+  const [studyQuizAnswer, setStudyQuizAnswer] = useState('')
+  const [studyQuizFeedback, setStudyQuizFeedback] = useState('')
+  const [studyQuizAnswered, setStudyQuizAnswered] = useState(false)
+  const [moodValue, setMoodValue] = useState('neutral')
+  const [moodReflection, setMoodReflection] = useState('')
+  const [moodSaving, setMoodSaving] = useState(false)
+  const [recentMoodCheckIns, setRecentMoodCheckIns] = useState([])
+  const [moodStatus, setMoodStatus] = useState('')
+  const [placementDocument, setPlacementDocument] = useState(null)
+  const [selectedPlacementFile, setSelectedPlacementFile] = useState(null)
+  const [placementUploading, setPlacementUploading] = useState(false)
+  const [placementAnalyzing, setPlacementAnalyzing] = useState(false)
+  const [placementAnalysis, setPlacementAnalysis] = useState(null)
+  const [careerGoal, setCareerGoal] = useState('')
+  const [targetCompany, setTargetCompany] = useState('')
+  const [targetRole, setTargetRole] = useState('')
+  const [expectedSalary, setExpectedSalary] = useState('')
+  const [currentSkills, setCurrentSkills] = useState('')
+  const [skillsToImprove, setSkillsToImprove] = useState('')
+  const [preparationLevel, setPreparationLevel] = useState('')
+  const [applicationTimeline, setApplicationTimeline] = useState('')
+  const [jobDescription, setJobDescription] = useState('')
+  const [externalResearchConsent, setExternalResearchConsent] = useState(false)
+  const [researchResult, setResearchResult] = useState(null)
+  const [studyMinutes, setStudyMinutes] = useState('25')
+  const [studySubjectCode, setStudySubjectCode] = useState('')
+  const [studyProgress, setStudyProgress] = useState(null)
+  const [complaintAction, setComplaintAction] = useState({
+    category: 'other',
+    title: '',
+    description: '',
+  })
   const isStudent = profile.role === 'student'
-  const historyKey = `smart-campus-assistant-${profile.role}-${profile.id}`
+  const historyKey = `smart-campus-assistant-${profile.role}-${profile.id}-${mode}`
+  const legacyHistoryKey = `smart-campus-assistant-${profile.role}-${profile.id}`
   const [messages, setMessages] = useState(() => {
     const saved = sessionStorage.getItem(historyKey)
+      || (mode === 'general' ? sessionStorage.getItem(legacyHistoryKey) : null)
     if (!saved) {
       return [{
         role: 'assistant',
-        content: 'Ask about your authorized timetable, campus schedule, or academic records.',
+        content: "Hi! I'm your Campus Assistant. Ask about your timetable, attendance, studies, or placements.",
         intent: 'general',
       }]
     }
@@ -1392,11 +1721,129 @@ function AssistantPage({ data, busy, error, reload, profile }) {
 
   useEffect(() => {
     sessionStorage.setItem(historyKey, JSON.stringify(messages.slice(-40)))
-  }, [historyKey, messages])
+    if (mode === 'general') sessionStorage.setItem(legacyHistoryKey, JSON.stringify(messages.slice(-40)))
+  }, [historyKey, legacyHistoryKey, messages, mode])
 
-  async function ask(event) {
-    event.preventDefault()
-    const query = message.trim()
+  useEffect(() => {
+    const history = historyRef.current
+    if (history) history.scrollTo({ top: history.scrollHeight, behavior: 'smooth' })
+  }, [messages, working])
+
+  useEffect(() => {
+    let active = true
+    apiRequest(`/assistant/conversations?mode=${encodeURIComponent(mode)}`, {
+      token: sessionStorage.getItem('smart-campus-token'),
+    }).then((items) => {
+      if (active) setConversations(items)
+    }).catch((requestError) => {
+      if (active) setActionError(requestError.message)
+    })
+    return () => { active = false }
+  }, [mode])
+
+  useEffect(() => {
+    if (mode !== 'study' || !isStudent) return undefined
+    let active = true
+    apiRequest('/assistant/academic-progress', {
+      token: sessionStorage.getItem('smart-campus-token'),
+    }).then((progress) => {
+      if (active) setStudyProgress(progress)
+    }).catch((requestError) => {
+      if (active) setActionError(requestError.message)
+    })
+    return () => { active = false }
+  }, [isStudent, mode])
+
+  useEffect(() => {
+    if (!isStudent || !['study', 'placement'].includes(mode)) return undefined
+    let active = true
+    const documentType = mode === 'study' ? 'study' : 'placement'
+    apiRequest(`/assistant/${documentType}/documents`, {
+      token: sessionStorage.getItem('smart-campus-token'),
+    }).then((result) => {
+      if (!active) return
+      const documents = result.documents || []
+      if (documentType === 'study') setStudyDocument(documents[0] || null)
+      else setPlacementDocument(documents[0] || null)
+    }).catch((requestError) => {
+      if (active) setActionError(requestError.message)
+    })
+    return () => { active = false }
+  }, [isStudent, mode])
+
+  useEffect(() => {
+    if (!isStudent || mode !== 'mood') return undefined
+    let active = true
+    apiRequest('/assistant/mood/check-ins?limit=5', {
+      token: sessionStorage.getItem('smart-campus-token'),
+    }).then((result) => {
+      if (active) setRecentMoodCheckIns(result.check_ins || [])
+    }).catch((requestError) => {
+      if (active) setActionError(requestError.message)
+    })
+    return () => { active = false }
+  }, [isStudent, mode])
+
+  function changeMode(nextMode) {
+    if (nextMode === mode) return
+    sessionStorage.setItem(historyKey, JSON.stringify(messages.slice(-40)))
+    setMode(nextMode)
+    setConversationId('')
+    setMessage('')
+    setFreeTime(null)
+    setActionError('')
+    setPendingConfirmation(null)
+    setResearchResult(null)
+    setExternalResearchConsent(false)
+    setPlacementPractice(null)
+    setStudyDocument(null)
+    setSelectedStudyFile(null)
+    setStudyUploading(false)
+    setStudyAnalyzing(false)
+    setStudyAnalysis(null)
+    setStudyActivities([])
+    setStudyQuiz([])
+    setStudyQuizIndex(0)
+    setStudyQuizScore(0)
+    setStudyQuizAnswer('')
+    setStudyQuizFeedback('')
+    setStudyQuizAnswered(false)
+    setPlacementDocument(null)
+    setSelectedPlacementFile(null)
+    setPlacementUploading(false)
+    setPlacementAnalyzing(false)
+    setPlacementAnalysis(null)
+    const saved = sessionStorage.getItem(
+      `smart-campus-assistant-${profile.role}-${profile.id}-${nextMode}`,
+    )
+    if (!saved) {
+      setMessages([{
+        role: 'assistant',
+        content: nextMode === 'study'
+          ? 'Upload your course material or ask for help with a subject. Your study content stays separate from other Assistant modes.'
+          : nextMode === 'placement'
+            ? 'Practice interview questions or research a career goal using cited sources when live search is available.'
+            : nextMode === 'mood'
+              ? 'How are you feeling after your last lecture or today? You can also share an academic factor, but mood details are kept on the private Mood check-in page.'
+              : "Hi! I'm your Campus Assistant. Ask about your timetable, attendance, studies, or placements.",
+        intent: nextMode,
+      }])
+      return
+    }
+    try {
+      const parsed = JSON.parse(saved)
+      setMessages(Array.isArray(parsed)
+        ? parsed.filter((turn) => ['user', 'assistant'].includes(turn.role) && typeof turn.content === 'string').slice(-40)
+        : [])
+    } catch (parseError) {
+      if (!(parseError instanceof SyntaxError)) throw parseError
+      sessionStorage.removeItem(`smart-campus-assistant-${profile.role}-${profile.id}-${nextMode}`)
+      setMessages([])
+    }
+  }
+
+  async function submitMessage(value) {
+    const query = value.trim()
     if (!query || working) return
     const userTurn = { role: 'user', content: query }
     const history = [...messages, userTurn].slice(-8).map(({ role, content, intent }) => ({
@@ -1411,8 +1858,23 @@ function AssistantPage({ data, busy, error, reload, profile }) {
       const answer = await apiRequest('/assistant/chat', {
         method: 'POST',
         token: sessionStorage.getItem('smart-campus-token'),
-        body: { message: query, history, ...(day ? { day } : {}) },
+        body: {
+          message: query,
+          mode,
+          ...(mode === 'study' && studyDocument?.id ? { document_id: studyDocument.id } : {}),
+          ...(mode === 'placement' && placementDocument?.id ? { document_id: placementDocument.id } : {}),
+          history,
+          ...(conversationId ? { conversation_id: conversationId } : {}),
+          ...(day ? { day } : {}),
+        },
       })
+      if (answer.conversation_id) setConversationId(answer.conversation_id)
+      if (answer.confirmation_id && answer.action?.summary) {
+        setPendingConfirmation({
+          confirmation_id: answer.confirmation_id,
+          summary: answer.action.summary,
+        })
+      }
       setMessages((current) => [...current, {
         role: 'assistant',
         content: answer.reply,
@@ -1423,13 +1885,23 @@ function AssistantPage({ data, busy, error, reload, profile }) {
         data_limitations: answer.data_limitations || [],
         disclaimer: answer.disclaimer,
         suggestions: answer.suggestions || [],
+        action: answer.action,
+        requires_confirmation: answer.requires_confirmation,
+        confirmation_id: answer.confirmation_id,
+        sources: answer.sources || [],
       }].slice(-40))
       setMessage('')
+      setLastFailedRequest(null)
     } catch (requestError) {
       setActionError(requestError.message)
+      setLastFailedRequest({ message: query })
     } finally {
       setWorking(false)
     }
+  }
+  async function ask(event) {
+    event.preventDefault()
+    await submitMessage(message)
   }
   async function findFreeTime() {
     setWorking(true)
@@ -1444,36 +1916,909 @@ function AssistantPage({ data, busy, error, reload, profile }) {
       setWorking(false)
     }
   }
-  function clearConversation() {
-    const greeting = {
-      role: 'assistant',
-      content: 'Chat cleared. Ask about your authorized campus schedule or records.',
-      intent: 'general',
+  async function createPlacementPractice(topic = 'Java', difficulty = 'beginner') {
+    setWorking(true)
+    setActionError('')
+    try {
+      const result = await apiRequest('/assistant/placement/practice', {
+        method: 'POST',
+        token: sessionStorage.getItem('smart-campus-token'),
+        body: { topic, difficulty },
+      })
+      setPlacementPractice(result)
+      setPlacementAnswer('')
+      setMessages((current) => [...current, {
+        role: 'assistant',
+        content: `${result.topic} practice (${result.difficulty}): ${result.question}`,
+        intent: 'placement_preparation',
+        provider: 'grounded_rule_engine',
+      }].slice(-40))
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setWorking(false)
     }
-    setMessages([greeting])
+  }
+  async function submitPlacementAnswer(event) {
+    event.preventDefault()
+    if (!placementPractice?.id || !placementAnswer.trim()) return
+    setWorking(true)
+    setActionError('')
+    try {
+      const result = await apiRequest(
+        `/assistant/placement/practice/${encodeURIComponent(placementPractice.id)}/evaluate`,
+        {
+          method: 'POST',
+          token: sessionStorage.getItem('smart-campus-token'),
+          body: { answer: placementAnswer.trim() },
+        },
+      )
+      setMessages((current) => [...current, {
+        role: 'assistant',
+        content: `Practice feedback (${result.score ?? 'not scored'}): ${result.evaluation || 'Feedback is unavailable.'}`,
+        intent: 'placement_preparation',
+        provider: result.provider || 'grounded_rule_engine',
+      }].slice(-40))
+      setPlacementPractice(null)
+      setPlacementAnswer('')
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setWorking(false)
+    }
+  }
+  async function loadPlacementProgress() {
+    setWorking(true)
+    setActionError('')
+    try {
+      const progress = await apiRequest('/assistant/placement/progress', {
+        token: sessionStorage.getItem('smart-campus-token'),
+      })
+      setMessages((current) => [...current, {
+        role: 'assistant',
+        content: `Placement progress: ${progress.completed_sessions} sessions, average ${progress.average_score ?? 'not available'}, next topic ${progress.next_topic}.`,
+        intent: 'placement_preparation',
+        provider: 'grounded_rule_engine',
+      }].slice(-40))
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setWorking(false)
+    }
+  }
+  async function uploadAssistantDocument(event) {
+    const file = event.target.files?.[0]
+    const validationError = validateAssistantFile(file)
+    if (validationError) {
+      setActionError(validationError)
+      return
+    }
+    if (mode === 'study') {
+      setSelectedStudyFile(file)
+      setStudyUploading(true)
+      setStudyDocument(null)
+      setStudyAnalysis(null)
+    } else {
+      setSelectedPlacementFile(file)
+      setPlacementUploading(true)
+      setPlacementDocument(null)
+      setPlacementAnalysis(null)
+    }
+    const formData = new FormData()
+    formData.append('file', file)
+    setWorking(true)
+    setActionError('')
+    try {
+      const path = mode === 'study'
+        ? '/assistant/study/documents'
+        : '/assistant/placement/documents'
+      const result = await apiRequest(path, {
+        method: 'POST',
+        token: sessionStorage.getItem('smart-campus-token'),
+        body: formData,
+      })
+      if (mode === 'study') {
+        setStudyDocument({ ...result, id: result.id || result.document_id })
+        setStudyActivities([])
+        setStudyUploading(false)
+        setStudyAnalysis(null)
+      } else {
+        setPlacementDocument({ ...result, id: result.id || result.document_id })
+        setPlacementUploading(false)
+        setPlacementAnalysis(null)
+      }
+    } catch (requestError) {
+      setActionError(requestError.message)
+      if (mode === 'study') setStudyUploading(false)
+      else setPlacementUploading(false)
+    } finally {
+      setWorking(false)
+    }
+  }
+    async function analyzePlacementDocument() {
+      if (!placementDocument?.id) return
+      setPlacementAnalyzing(true)
+      setActionError('')
+      try {
+        const result = await apiRequest(
+          `/assistant/placement/documents/${encodeURIComponent(placementDocument.id)}/analysis`,
+          { method: 'POST', token: sessionStorage.getItem('smart-campus-token') },
+        )
+        setPlacementAnalysis(result)
+      } catch (requestError) {
+        setActionError(requestError.message)
+      } finally {
+        setPlacementAnalyzing(false)
+      }
+    }
+    async function analyzePastedJobDescription() {
+      const text = jobDescription.trim()
+      if (text.length < 30) {
+        setActionError('Paste at least 30 characters of job description text before analysis.')
+        return
+      }
+      setWorking(true)
+      setActionError('')
+      try {
+        const result = await apiRequest('/assistant/placement/job-description/analysis', {
+          method: 'POST',
+          token: sessionStorage.getItem('smart-campus-token'),
+          body: { job_description: text },
+        })
+        setPlacementAnalysis(result)
+      } catch (requestError) {
+        setActionError(requestError.message)
+      } finally {
+        setWorking(false)
+      }
+    }
+  async function saveMoodCheckIn(event) {
+    event.preventDefault()
+    setMoodSaving(true)
+    setActionError('')
+    setMoodStatus('')
+    try {
+      await apiRequest('/assistant/mood/check-ins', {
+        method: 'POST',
+        token: sessionStorage.getItem('smart-campus-token'),
+        body: {
+          mood: moodValue,
+          ...(moodReflection.trim() ? { reflection: moodReflection.trim() } : {}),
+        },
+      })
+      const result = await apiRequest('/assistant/mood/check-ins?limit=5', {
+        token: sessionStorage.getItem('smart-campus-token'),
+      })
+      setRecentMoodCheckIns(result.check_ins || [])
+      setMoodReflection('')
+      setMoodStatus('Your private check-in was saved and recent check-ins were refreshed.')
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setMoodSaving(false)
+    }
+  }
+  async function analyzeStudyDocument() {
+    if (!studyDocument?.id) return
+    setStudyAnalyzing(true)
+    setActionError('')
+    try {
+      const result = await apiRequest(
+        `/assistant/study/documents/${encodeURIComponent(studyDocument.id)}/analysis`,
+        {
+          method: 'POST',
+          token: sessionStorage.getItem('smart-campus-token'),
+        },
+      )
+      setStudyAnalysis(result)
+      setMessages((current) => [...current, {
+        role: 'assistant',
+        content: `Document analysed successfully.\n\nSubject: ${result.document?.main_subject}\nSummary: ${result.document?.summary}\n\nMain topics:\n${(result.chapter_topic_analysis?.main_topics || []).map((topic, index) => `${index + 1}. ${topic}`).join('\n')}`,
+        intent: 'document_analysis',
+        provider: 'extractive_document_context',
+      }].slice(-40))
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setStudyAnalyzing(false)
+    }
+  }
+
+  function removeSelectedStudyFile() {
+    setSelectedStudyFile(null)
+    setStudyDocument(null)
+    setStudyAnalysis(null)
+  }
+
+  async function generateStudyQuiz() {
+    if (!studyDocument?.id) return
+    setWorking(true)
+    setActionError('')
+    try {
+      const token = sessionStorage.getItem('smart-campus-token')
+      const documentPath = `/assistant/study/documents/${encodeURIComponent(studyDocument.id)}`
+      const [quizResult, flashcardResult] = await Promise.all([
+        apiRequest(`${documentPath}/quiz`, { method: 'POST', token }),
+        apiRequest(`${documentPath}/flashcards`, { method: 'POST', token }),
+      ])
+      const questions = quizResult.questions || []
+      const flashcards = flashcardResult.flashcards || []
+      setStudyQuiz(questions)
+      setStudyQuizIndex(0)
+      setStudyQuizScore(0)
+      setStudyQuizAnswer('')
+      setStudyQuizFeedback('')
+      setStudyQuizAnswered(false)
+      const activities = [
+        ...questions.map((question) => `Quiz: ${question.question || question}`),
+        ...flashcards.map((card) => `Flashcard: ${card.front || card.question || 'Review'} — ${card.back || card.answer || ''}`),
+      ]
+      setStudyActivities(activities.length
+        ? activities
+        : ['No quiz questions or flashcards could be generated from this document.'])
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setWorking(false)
+    }
+  }
+  function submitStudyQuizAnswer(event) {
+    event.preventDefault()
+    const question = studyQuiz[studyQuizIndex]
+    if (!question || !studyQuizAnswer.trim() || studyQuizAnswered) return
+    const correct = studyQuizAnswer.trim().toLowerCase() === String(question.answer || '').trim().toLowerCase()
+    if (correct) setStudyQuizScore((score) => score + 1)
+    setStudyQuizFeedback(correct
+      ? 'Correct.'
+      : `Not quite. The document-based answer is: ${question.answer}`)
+    setStudyQuizAnswered(true)
+  }
+  function advanceStudyQuiz() {
+    if (studyQuizIndex + 1 >= studyQuiz.length) {
+      setStudyQuizIndex(studyQuiz.length)
+      return
+    }
+    setStudyQuizIndex((index) => index + 1)
+    setStudyQuizAnswer('')
+    setStudyQuizFeedback('')
+    setStudyQuizAnswered(false)
+  }
+  async function deletePrivateDocument(documentType, documentId) {
+    if (!documentId) return
+    setWorking(true)
+    setActionError('')
+    try {
+      await apiRequest(
+        `/assistant/${documentType}/documents/${encodeURIComponent(documentId)}`,
+        {
+          method: 'DELETE',
+          token: sessionStorage.getItem('smart-campus-token'),
+        },
+      )
+      if (documentType === 'study') {
+        setStudyDocument(null)
+        setStudyActivities([])
+      } else {
+        setPlacementDocument(null)
+        setSelectedPlacementFile(null)
+        setPlacementAnalysis(null)
+      }
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setWorking(false)
+    }
+  }
+  async function recordStudySession() {
+    const subject = academicReport?.subjects?.find((item) => item.subject_code === studySubjectCode)
+      || academicReport?.subjects?.[0]
+    if (!subject?.subject_code) {
+      setActionError('A linked subject is required before study time can be saved.')
+      return
+    }
+    setWorking(true)
+    setActionError('')
+    try {
+      await apiRequest('/assistant/academic-progress/sessions', {
+        method: 'POST',
+        token: sessionStorage.getItem('smart-campus-token'),
+        body: {
+          subject_code: subject.subject_code,
+          subject_name: subject.subject_name,
+          completed_minutes: Number(studyMinutes),
+          activity: 'Study Buddy session',
+        },
+      })
+      const progress = await apiRequest('/assistant/academic-progress', {
+        token: sessionStorage.getItem('smart-campus-token'),
+      })
+      setStudyProgress(progress)
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setWorking(false)
+    }
+  }
+  async function researchCareer(event) {
+    event.preventDefault()
+    const placementContext = {
+      ...(targetCompany.trim() ? { company: targetCompany.trim() } : {}),
+      ...(targetRole.trim() ? { role: targetRole.trim() } : {}),
+      ...(expectedSalary.trim() ? { salary: expectedSalary.trim() } : {}),
+      ...(currentSkills.trim() ? { current_skills: currentSkills.trim() } : {}),
+      ...(skillsToImprove.trim() ? { skills_to_improve: skillsToImprove.trim() } : {}),
+      ...(preparationLevel.trim() ? { preparation_level: preparationLevel.trim() } : {}),
+      ...(applicationTimeline.trim() ? { application_timeline: applicationTimeline.trim() } : {}),
+    }
+    if (!careerGoal.trim()) return
+    setWorking(true)
+    setActionError('')
+    setResearchResult(null)
+    try {
+      const userTurn = { role: 'user', content: `Career goal: ${careerGoal.trim()}` }
+      const history = [...messages, userTurn].slice(-8).map(({ role, content, intent }) => ({
+        role,
+        content,
+        ...(intent ? { intent } : {}),
+      }))
+      const plan = await apiRequest('/assistant/chat', {
+        method: 'POST',
+        token: sessionStorage.getItem('smart-campus-token'),
+        body: {
+          message: userTurn.content,
+          mode: 'placement',
+          placement_context: placementContext,
+          history,
+          ...(conversationId ? { conversation_id: conversationId } : {}),
+        },
+      })
+      if (plan.conversation_id) setConversationId(plan.conversation_id)
+      setMessages((current) => [...current, userTurn, {
+        role: 'assistant',
+        content: plan.reply,
+        intent: plan.intent,
+        provider: plan.provider,
+        recommendations: plan.recommendations || [],
+        data_limitations: plan.data_limitations || [],
+      }].slice(-40))
+      const result = await apiRequest('/assistant/placement/research', {
+        method: 'POST',
+        token: sessionStorage.getItem('smart-campus-token'),
+        body: {
+          career_goal: [
+            careerGoal.trim(),
+            targetCompany.trim() ? `Company: ${targetCompany.trim()}` : '',
+            targetRole.trim() ? `Role: ${targetRole.trim()}` : '',
+          ].filter(Boolean).join('. '),
+          allow_external_processing: externalResearchConsent,
+        },
+      })
+      setResearchResult(result)
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setWorking(false)
+    }
+  }
+  async function newConversation() {
+    try {
+      const created = await apiRequest(`/assistant/conversations?mode=${encodeURIComponent(mode)}`, {
+        method: 'POST',
+        token: sessionStorage.getItem('smart-campus-token'),
+      })
+      setConversationId(created.id)
+      setMessages([{
+        role: 'assistant',
+        content: "Hi! I'm your Campus Assistant. Ask about your campus records, studies, or placement preparation.",
+        intent: 'general',
+      }])
+      setConversations((current) => [
+        { id: created.id, title: created.title, updated_at: created.updated_at, message_count: 0 },
+        ...current,
+      ])
+    } catch (requestError) {
+      setActionError(requestError.message)
+    }
+  }
+
+  async function loadConversation(conversationIdToLoad) {
+    try {
+      setWorking(true)
+      const conversation = await apiRequest(`/assistant/conversations/${encodeURIComponent(conversationIdToLoad)}`, {
+        token: sessionStorage.getItem('smart-campus-token'),
+      })
+      setConversationId(conversation.id)
+      setMessages(conversation.messages.length
+        ? conversation.messages
+        : [{
+          role: 'assistant',
+          content: 'Conversation loaded. Ask about campus information or placement preparation.',
+          intent: 'general',
+        }])
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  async function clearConversation() {
+    if (!globalThis.confirm('Clear this conversation? This removes the saved chat history.')) return
+    if (mode !== 'general') {
+      if (conversationId) {
+        try {
+          await apiRequest(`/assistant/conversations/${encodeURIComponent(conversationId)}`, {
+            method: 'DELETE',
+            token: sessionStorage.getItem('smart-campus-token'),
+          })
+        } catch (requestError) {
+          setActionError(requestError.message)
+          return
+        }
+      }
+      setConversationId('')
+      setMessages([])
+      sessionStorage.removeItem(historyKey)
+      return
+    }
+    if (conversationId) {
+      try {
+        await apiRequest(`/assistant/conversations/${encodeURIComponent(conversationId)}`, {
+          method: 'DELETE',
+          token: sessionStorage.getItem('smart-campus-token'),
+        })
+      } catch (requestError) {
+        setActionError(requestError.message)
+        return
+      }
+    }
+    await newConversation()
+  }
+
+  function startVoiceInput() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognition) {
+      setActionError('Voice input is not supported by this browser.')
+      return
+    }
+    const recognition = new SpeechRecognition()
+    recognition.lang = 'en-IN'
+    recognition.interimResults = true
+    recognition.continuous = false
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map((result) => result[0]?.transcript || '')
+        .join(' ')
+        .trim()
+      setMessage(transcript)
+    }
+    recognition.onend = () => setListening(false)
+    recognition.onerror = () => {
+      setListening(false)
+      setActionError('Microphone voice recognition was unavailable or denied.')
+    }
+    setListening(true)
+    recognition.start()
+  }
+
+  function speakLatestResponse() {
+    if (!('speechSynthesis' in window)) {
+      setActionError('Text-to-speech is not supported by this browser.')
+      return
+    }
+    const latest = [...messages].reverse().find((turn) => turn.role === 'assistant')
+    if (!latest) return
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(latest.content))
+  }
+
+  async function prepareComplaintAction() {
+    if (!complaintAction.title.trim() || !complaintAction.description.trim()) {
+      setActionError('Enter a complaint title and description before confirmation.')
+      return
+    }
+    try {
+      setWorking(true)
+      const prepared = await apiRequest('/assistant/actions/prepare', {
+        method: 'POST',
+        token: sessionStorage.getItem('smart-campus-token'),
+        body: complaintAction,
+      })
+      setPendingConfirmation(prepared)
+      setActionError('')
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  async function confirmPendingAction() {
+    if (!pendingConfirmation) return
+    try {
+      setWorking(true)
+      const result = await apiRequest(
+        `/assistant/actions/${encodeURIComponent(pendingConfirmation.confirmation_id)}/confirm`,
+        { method: 'POST', token: sessionStorage.getItem('smart-campus-token') },
+      )
+      setPendingConfirmation(null)
+      setComplaintAction({ category: 'other', title: '', description: '' })
+      setMessages((current) => [...current, {
+        role: 'assistant',
+        content: `Complaint submitted successfully. Status: ${result.result.status}.`,
+        intent: 'create_complaint',
+      }].slice(-40))
+    } catch (requestError) {
+      setActionError(requestError.message)
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  async function cancelPendingAction() {
+    if (!pendingConfirmation) return
+    try {
+      await apiRequest(
+        `/assistant/actions/${encodeURIComponent(pendingConfirmation.confirmation_id)}/cancel`,
+        { method: 'POST', token: sessionStorage.getItem('smart-campus-token') },
+      )
+      setPendingConfirmation(null)
+      setActionError('')
+    } catch (requestError) {
+      setActionError(requestError.message)
+    }
   }
   const suggestions = messages.slice().reverse().find((turn) => turn.role === 'assistant')?.suggestions
-    || (isStudent ? ASSISTANT_SUGGESTIONS : FACULTY_ASSISTANT_SUGGESTIONS)
+    || (mode === 'placement'
+      ? ['Create a placement preparation plan.', 'What skills should I build for this role?', 'Give me a technical interview practice question.']
+      : mode === 'study'
+        ? ['Explain this topic at my current level.', 'Create a 7-day study plan.', 'Quiz me on the material I uploaded.']
+        : (isStudent ? ASSISTANT_SUGGESTIONS : FACULTY_ASSISTANT_SUGGESTIONS))
+  const visibleConversations = conversations.filter((conversation) => (conversation.mode || 'general') === mode)
+  const weekStart = referenceTime - 7 * 24 * 60 * 60 * 1000
+  const computedWeeklyMinutes = (studyProgress?.sessions || [])
+    .filter((session) => new Date(session.created_at).getTime() >= weekStart)
+    .reduce((total, session) => total + Number(session.completed_minutes || 0), 0)
+  const weeklyStudyMinutes = studyProgress?.weekly_minutes ?? computedWeeklyMinutes
+  const studyStreakDays = studyProgress?.streak_days
+    ?? calculateStudyStreak(studyProgress?.sessions || [])
   return (
-    <>
+    <div className="assistant-page-shell">
       <ErrorMessage error={error || actionError} />
       {busy ? <Loading /> : (
         <div className="assistant-layout">
-          {(data?.freeTime?.message?.startsWith('DEMO DATA:') || data?.timetable?.is_demo) && (
-            <div className="alert success" role="status">DEMO DATA: assistant context uses synthetic academic and timetable records.</div>
-          )}
-          <section className="panel">
-            <p className="eyebrow">GROUNDED CAMPUS ASSISTANT</p>
-            <h2>Ask about your campus records</h2>
-            <p className="muted">{isStudent
-              ? 'Answers use your own linked academic records and timetable. Missing information is identified rather than guessed.'
+          <section className="panel assistant-chat-panel">
+            <header className="assistant-chat-header">
+              <div>
+                <p className="eyebrow">SMART CAMPUS AI</p>
+                <h2>{mode === 'study' ? 'Study Buddy' : mode === 'placement' ? 'Placement Assistant' : mode === 'mood' ? 'Mood Detector' : 'General Campus Assistant'}</h2>
+              </div>
+              {isStudent && (
+                <label className="assistant-mode-picker">
+                  <span>Assistant mode</span>
+                  <select
+                    aria-label="Assistant mode"
+                    disabled={working}
+                    onChange={(event) => changeMode(event.target.value)}
+                    value={mode}
+                  >
+                    {availableAssistantModes(profile.role).map((item) => (
+                      <option key={item.id} value={item.id}>{item.label}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </header>
+            <div className="assistant-controls">
+              <button className="button secondary" type="button" onClick={newConversation}>New conversation</button>
+              {visibleConversations.length > 0 && (
+                <select
+                  aria-label="Saved conversation"
+                  className="conversation-picker"
+                  onChange={(event) => event.target.value && loadConversation(event.target.value)}
+                  value={conversationId || ''}
+                >
+                  <option value="">Saved conversations</option>
+                  {visibleConversations.map((conversation) => (
+                    <option key={conversation.id} value={conversation.id}>{conversation.title || 'Conversation'}</option>
+                  ))}
+                </select>
+              )}
+              {lastFailedRequest && (
+                <button
+                  className="button secondary"
+                  type="button"
+                  disabled={working}
+                  onClick={() => submitMessage(lastFailedRequest.message)}
+                >
+                  Retry
+                </button>
+              )}
+              <button className="button secondary" disabled={working} onClick={clearConversation} type="button">Clear chat</button>
+            </div>
+            <div className="assistant-scroll-area" ref={historyRef}>
+              {(data?.freeTime?.message?.startsWith('DEMO DATA:') || data?.timetable?.is_demo) && (
+                <div className="alert success" role="status">DEMO DATA: assistant context uses synthetic academic and timetable records.</div>
+              )}
+              <p className="muted">{isStudent
+              ? mode === 'study'
+                ? 'Get explanations, quizzes, flashcards, and study planning based on your materials and academic progress. Uploaded content is private to your account.'
+                : mode === 'placement'
+                  ? 'Practice interview skills and research a career goal. Live career research is shown only with verifiable source links.'
+                  : mode === 'mood'
+                    ? 'Share a voluntary check-in. Private mood details stay out of ordinary assistant conversations.'
+                    : 'Answers use your own linked academic records and timetable. Missing information is identified rather than guessed.'
               : 'Answers use your assigned timetable and authorized class records. Student information outside your scope is not available.'}</p>
-            <label className="day-filter">Day (optional)
+            {mode === 'study' && isStudent && (
+              <section className="assistant-mode-tools">
+                <h3>Study materials</h3>
+                <label className="study-upload-zone" htmlFor="study-material-upload">
+                  <strong>Upload Study Material</strong>
+                  <span>PDF, DOCX or TXT · maximum 5 MB</span>
+                  <input
+                    accept=".pdf,.docx,.txt,application/pdf,text/plain"
+                    disabled={working}
+                    id="study-material-upload"
+                    onChange={uploadAssistantDocument}
+                    type="file"
+                  />
+                </label>
+                {selectedStudyFile && (
+                  <div className="selected-study-file">
+                    <div>
+                      <strong>{selectedStudyFile.name}</strong>
+                      <small>{studyUploading ? 'Uploading and extracting…' : studyDocument ? 'Uploaded and ready to analyse' : 'Upload not complete'}</small>
+                    </div>
+                    <button className="button secondary small" disabled={working} onClick={removeSelectedStudyFile} type="button">Remove</button>
+                  </div>
+                )}
+                {studyDocument?.id && (
+                  <button className="button primary" disabled={working || studyAnalyzing} onClick={analyzeStudyDocument} type="button">
+                    {studyAnalyzing ? 'Analysing document…' : 'Analyse Document'}
+                  </button>
+                )}
+                {studyDocument && (
+                  <div className="assistant-document">
+                    <strong>{studyDocument.filename || 'Uploaded study material'}</strong>
+                    <p>{studyDocument.summary || 'Private material is ready for study activities.'}</p>
+                    <button className="button secondary" disabled={working} onClick={generateStudyQuiz} type="button">Generate quiz and flashcards</button>
+                    <button className="button secondary" disabled={working} onClick={() => deletePrivateDocument('study', studyDocument.id)} type="button">Delete private material</button>
+                    {studyActivities.length > 0 && <ol>{studyActivities.map((activity, index) => <li key={`${index}-${activity}`}>{activity}</li>)}</ol>}
+                    {studyQuiz.length > 0 && (
+                      studyQuizIndex >= studyQuiz.length
+                        ? <p role="status">Quiz complete: {studyQuizScore} of {studyQuiz.length} correct.</p>
+                        : <form className="assistant-form" onSubmit={submitStudyQuizAnswer}>
+                          <p><strong>Question {studyQuizIndex + 1} of {studyQuiz.length}</strong></p>
+                          <p>{studyQuiz[studyQuizIndex].question}</p>
+                          <label htmlFor="study-quiz-answer">Your answer</label>
+                          <input
+                            id="study-quiz-answer"
+                            maxLength="200"
+                            disabled={studyQuizAnswered}
+                            onChange={(event) => setStudyQuizAnswer(event.target.value)}
+                            required
+                            value={studyQuizAnswer}
+                          />
+                          {studyQuizFeedback && <p role="status">{studyQuizFeedback}</p>}
+                          {studyQuizAnswered
+                            ? <button className="button primary" onClick={advanceStudyQuiz} type="button">{studyQuizIndex + 1 === studyQuiz.length ? 'Finish quiz' : 'Next question'}</button>
+                            : <button className="button primary" disabled={!studyQuizAnswer.trim()} type="submit">Submit answer</button>}
+                        </form>
+                    )}
+                  </div>
+                )}
+                {studyAnalysis && (
+                  <section className="study-analysis" aria-live="polite">
+                    <h3>Document analysis</h3>
+                    <p><strong>{studyAnalysis.document?.name}</strong></p>
+                    <p>{studyAnalysis.document?.summary}</p>
+                    <p><strong>Main subject:</strong> {studyAnalysis.document?.main_subject}</p>
+                    <p><strong>Extracted words:</strong> {studyAnalysis.document?.word_count}</p>
+                    <details>
+                      <summary>Extracted text preview</summary>
+                      <p>{studyAnalysis.document?.extracted_text_preview}</p>
+                    </details>
+                    <h4>Main topics</h4>
+                    <ul>{(studyAnalysis.chapter_topic_analysis?.main_topics || []).map((topic) => <li key={topic}>{topic}</li>)}</ul>
+                    <h4>Important points</h4>
+                    <ul>{(studyAnalysis.important_material?.important_points || []).map((point) => <li key={point}>{point}</li>)}</ul>
+                    <h4>Sample questions</h4>
+                    <ol>{(studyAnalysis.sample_exam_questions?.questions || []).map((item, index) => (
+                      <li key={`${item.question}-${index}`}><strong>{item.marks}-mark:</strong> {item.question}<p><strong>Answer:</strong> {item.answer}</p></li>
+                    ))}</ol>
+                    <h4>MCQs</h4>
+                    <ol>{(studyAnalysis.sample_exam_questions?.mcqs || []).map((item, index) => (
+                      <li key={`${item.question}-${index}`}>{item.question}<p><strong>Answer:</strong> {item.answer}</p></li>
+                    ))}</ol>
+                  </section>
+                )}
+                <div className="study-session-controls">
+                  <label>Subject
+                    <select onChange={(event) => setStudySubjectCode(event.target.value)} value={studySubjectCode || academicReport?.subjects?.[0]?.subject_code || ''}>
+                      {(academicReport?.subjects || []).map((subject) => (
+                        <option key={subject.subject_code} value={subject.subject_code}>{subject.subject_name || subject.subject_code}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>Study minutes
+                    <input max="600" min="1" onChange={(event) => setStudyMinutes(event.target.value)} type="number" value={studyMinutes} />
+                  </label>
+                  <button className="button secondary" disabled={working || !academicReport?.subjects?.length} onClick={recordStudySession} type="button">Log study session</button>
+                  {studyProgress && <small>Last 7 days: {weeklyStudyMinutes} minutes · Streak: {studyStreakDays} days · Recorded: {Object.values(studyProgress.subject_totals || {}).reduce((sum, minutes) => sum + Number(minutes || 0), 0)} minutes</small>}
+                </div>
+              </section>
+            )}
+            {mode === 'placement' && isStudent && (
+              <section className="assistant-mode-tools">
+                <h3>Career research</h3>
+                <form className="form-grid" onSubmit={researchCareer}>
+                  <label>Company
+                    <input maxLength="120" onChange={(event) => setTargetCompany(event.target.value)} value={targetCompany} />
+                  </label>
+                  <label>Target role
+                    <input maxLength="120" onChange={(event) => setTargetRole(event.target.value)} value={targetRole} />
+                  </label>
+                  <label>Expected salary
+                    <input maxLength="80" onChange={(event) => setExpectedSalary(event.target.value)} value={expectedSalary} />
+                  </label>
+                  <label>Current skills
+                    <input maxLength="500" onChange={(event) => setCurrentSkills(event.target.value)} value={currentSkills} />
+                  </label>
+                  <label>Skills to improve
+                    <input maxLength="500" onChange={(event) => setSkillsToImprove(event.target.value)} value={skillsToImprove} />
+                  </label>
+                  <label>Current preparation level
+                    <input maxLength="120" onChange={(event) => setPreparationLevel(event.target.value)} value={preparationLevel} />
+                  </label>
+                  <label>Application timeline
+                    <input maxLength="120" onChange={(event) => setApplicationTimeline(event.target.value)} value={applicationTimeline} />
+                  </label>
+                  <label>Career goal
+                    <input maxLength="160" onChange={(event) => setCareerGoal(event.target.value)} required value={careerGoal} />
+                  </label>
+                  <label>Job description (optional)
+                    <textarea maxLength="8000" onChange={(event) => setJobDescription(event.target.value)} rows="4" value={jobDescription} />
+                  </label>
+                  <button
+                    className="button secondary"
+                    disabled={working || jobDescription.trim().length < 30}
+                    onClick={analyzePastedJobDescription}
+                    type="button"
+                  >
+                    {working ? 'Analysing job description…' : 'Analyse Job Description'}
+                  </button>
+                  <label className="consent-label">
+                    <input checked={externalResearchConsent} onChange={(event) => setExternalResearchConsent(event.target.checked)} type="checkbox" />
+                    Optional: allow the career goal to be sent to web search. Pasted or uploaded job-description text is analysed locally only.
+                  </label>
+                  <button className="button primary" disabled={working || !careerGoal.trim()} type="submit">Create plan and check research</button>
+                </form>
+                {researchResult && (
+                  <div className="assistant-document" role="status">
+                    <strong>{researchResult.available ? 'Career research' : 'Live research unavailable'}</strong>
+                    {researchResult.summary && <p>{researchResult.summary}</p>}
+                    {!researchResult.available && researchResult.reason && <p>{researchResult.reason}</p>}
+                    {researchResult.date_researched && <small>Researched: {researchResult.date_researched}</small>}
+                    {researchResult.sources?.length > 0 && <ul>{researchResult.sources.map((source) => {
+                      const url = safeAssistantSourceUrl(source.url)
+                      return <li key={source.url}>
+                        {url ? <a href={url} rel="noreferrer" target="_blank">{source.title || url}</a> : (source.title || 'Source URL unavailable')}
+                        {source.published_at && <small> · Published: {source.published_at}</small>}
+                        {source.snippet && <p>{source.snippet}</p>}
+                      </li>
+                    })}</ul>}
+                  </div>
+                )}
+                <h3>Job description or CV</h3>
+                <label>Upload a job description or CV for private text extraction (PDF, DOCX, or TXT, max 5 MB)
+                  <input accept=".pdf,.docx,.txt,application/pdf,text/plain" disabled={working} onChange={uploadAssistantDocument} type="file" />
+                </label>
+                {selectedPlacementFile && (
+                  <div className="selected-study-file">
+                    <div>
+                      <strong>{selectedPlacementFile.name}</strong>
+                      <small>{placementUploading ? 'Uploading and extracting…' : placementDocument ? 'Uploaded and ready to analyse' : 'Upload not complete'}</small>
+                    </div>
+                  </div>
+                )}
+                {placementDocument && (
+                  <div className="assistant-document">
+                    <strong>{placementDocument.filename || 'Placement document'}</strong>
+                    <p>{placementDocument.summary || 'Private extracted text is ready to analyse.'}</p>
+                    <button className="button primary" disabled={working || placementAnalyzing} onClick={analyzePlacementDocument} type="button">
+                      {placementAnalyzing ? 'Analysing document…' : 'Analyse Job Description'}
+                    </button>
+                    <button className="button secondary" disabled={working} onClick={() => deletePrivateDocument('placement', placementDocument.id)} type="button">Delete private document</button>
+                  </div>
+                )}
+                {placementAnalysis && (
+                  <section className="study-analysis" aria-live="polite">
+                    <h3>Job description analysis</h3>
+                    <p>{placementAnalysis.document}</p>
+                    <h4>Explicit requirements</h4>
+                    <ul>{(placementAnalysis.explicit_requirements || []).map((item) => <li key={item}>{item}</li>)}</ul>
+                    <h4>Qualifications and eligibility</h4>
+                    <ul>{(placementAnalysis.qualifications_and_eligibility || []).map((item) => <li key={item}>{item}</li>)}</ul>
+                    <h4>Technical skills and tools</h4>
+                    <ul>{(placementAnalysis.technical_skills || []).map((item) => <li key={item}>{item}</li>)}</ul>
+                    <h4>Responsibilities</h4>
+                    <ul>{(placementAnalysis.responsibilities || []).map((item) => <li key={item}>{item}</li>)}</ul>
+                    <h4>Additional recommendations (not stated requirements)</h4>
+                    <ul>{(placementAnalysis.additional_recommendations || []).map((item) => <li key={item}>{item}</li>)}</ul>
+                    <h4>Suggested preparation roadmap</h4>
+                    <ol>{(placementAnalysis.roadmap || []).map((item) => <li key={item.week}>Week {item.week}: {item.focus}</li>)}</ol>
+                  </section>
+                )}
+                <h3>Mock interview practice</h3>
+                <div className="study-session-controls">
+                  <label>Topic
+                    <select onChange={(event) => setPlacementTopic(event.target.value)} value={placementTopic}>
+                      {['Java', 'Python', 'SQL', 'DBMS', 'OOP', 'Operating Systems', 'Computer Networks', 'DSA', 'Aptitude', 'HR Interview', 'Technical Interview'].map((topic) => <option key={topic}>{topic}</option>)}
+                    </select>
+                  </label>
+                  <label>Difficulty
+                    <select onChange={(event) => setPlacementDifficulty(event.target.value)} value={placementDifficulty}>
+                      {['beginner', 'intermediate', 'advanced'].map((level) => <option key={level}>{level}</option>)}
+                    </select>
+                  </label>
+                  <button className="button secondary" disabled={working} onClick={() => createPlacementPractice(placementTopic, placementDifficulty)} type="button">Start practice</button>
+                </div>
+                {placementPractice && (
+                  <form className="assistant-form" onSubmit={submitPlacementAnswer}>
+                    <p><strong>{placementPractice.topic}:</strong> {placementPractice.question}</p>
+                    <label htmlFor="placement-answer">Your answer</label>
+                    <textarea id="placement-answer" maxLength="5000" onChange={(event) => setPlacementAnswer(event.target.value)} required rows="4" value={placementAnswer} />
+                    <button className="button primary" disabled={working || !placementAnswer.trim()} type="submit">Get practice feedback</button>
+                  </form>
+                )}
+                <div className="assistant-controls">
+                  <button className="button secondary" disabled={working} onClick={loadPlacementProgress} type="button">Placement progress</button>
+                </div>
+              </section>
+            )}
+            {mode === 'mood' && isStudent && (
+              <section className="assistant-mode-tools">
+                <h3>Private mood check-in</h3>
+                <p className="muted">Voluntary and non-diagnostic. Your check-in and optional reflection are visible only to you.</p>
+                <form className="form-grid" onSubmit={saveMoodCheckIn}>
+                  <label htmlFor="assistant-mood-value">How are you feeling?</label>
+                  <select
+                    id="assistant-mood-value"
+                    onChange={(event) => setMoodValue(event.target.value)}
+                    value={moodValue}
+                  >
+                    {[
+                      ['very_low', 'Very low'],
+                      ['low', 'Low'],
+                      ['neutral', 'Neutral'],
+                      ['good', 'Good'],
+                      ['very_good', 'Very good'],
+                    ].map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                  <label htmlFor="assistant-mood-reflection">Optional private reflection</label>
+                  <textarea
+                    id="assistant-mood-reflection"
+                    maxLength="2000"
+                    onChange={(event) => setMoodReflection(event.target.value)}
+                    rows="2"
+                    value={moodReflection}
+                  />
+                  <button className="button primary" disabled={moodSaving} type="submit">
+                    {moodSaving ? 'Saving check-in…' : 'Save private check-in'}
+                  </button>
+                  {moodStatus && <p role="status">{moodStatus}</p>}
+                </form>
+                {recentMoodCheckIns.length > 0 && (
+                  <p className="muted">Most recent private check-in: {recentMoodCheckIns[0].mood} · {new Date(recentMoodCheckIns[0].created_at).toLocaleString()}</p>
+                )}
+              </section>
+            )}
+            {mode === 'general' && <label className="day-filter">Day (optional)
               <select onChange={(event) => setDay(event.target.value)} value={day}>
                 <option value="">Today / infer from message</option>
                 {DAYS.map((item) => <option key={item}>{item}</option>)}
               </select>
-            </label>
+            </label>}
             <div className="assistant-history" aria-label="Conversation history" aria-live="polite">
               {messages.map((turn, index) => (
                 <article className={`assistant-answer assistant-message ${turn.role}`} key={`${index}-${turn.intent || turn.role}`}>
@@ -1487,27 +2832,115 @@ function AssistantPage({ data, busy, error, reload, profile }) {
                   {turn.recommendations?.length > 0 && <ul>{turn.recommendations.map((item) => <li key={item}>{item}</li>)}</ul>}
                   {turn.data_limitations?.length > 0 && <p className="muted">Missing information: {turn.data_limitations.join(' ')}</p>}
                   {turn.disclaimer && <p className="muted">{turn.disclaimer}</p>}
+                  {turn.sources?.length > 0 && <ul className="assistant-sources">{turn.sources.map((source) => {
+                    const url = typeof source === 'string' ? safeAssistantSourceUrl(source) : safeAssistantSourceUrl(source.url)
+                    return <li key={typeof source === 'string' ? source : source.url}>
+                      {url ? <a href={url} rel="noreferrer" target="_blank">{typeof source === 'string' ? source : source.title || url}</a> : (typeof source === 'string' ? source : source.title || 'Source URL unavailable')}
+                    </li>
+                  })}</ul>}
+                  {turn.role === 'assistant' && (
+                    <button
+                      className="button secondary small"
+                      type="button"
+                      onClick={() => navigator.clipboard?.writeText(turn.content)}
+                    >
+                      Copy response
+                    </button>
+                  )}
                 </article>
               ))}
             </div>
+            {mode === 'general' && isStudent && messages.some((turn) => turn.intent === 'create_complaint') && (
+              <section className="panel assistant-action-card">
+                <h3>Prepare complaint</h3>
+                <p className="muted">Review the details before submitting. Nothing is written until you confirm.</p>
+                {pendingConfirmation ? (
+                  <>
+                    <p><strong>Category:</strong> {pendingConfirmation.summary.category}</p>
+                    <p><strong>Title:</strong> {pendingConfirmation.summary.title}</p>
+                    <p><strong>Description:</strong> {pendingConfirmation.summary.description}</p>
+                    <button className="button primary" type="button" disabled={working} onClick={confirmPendingAction}>Confirm submission</button>
+                    <button className="button secondary" type="button" disabled={working} onClick={cancelPendingAction}>Cancel</button>
+                  </>
+                ) : (
+                  <div className="form-grid">
+                    <label>Category
+                      <select value={complaintAction.category} onChange={(event) => setComplaintAction((current) => ({ ...current, category: event.target.value }))}>
+                        {['academic', 'facilities', 'transport', 'library', 'safety', 'other'].map((category) => (
+                          <option key={category} value={category}>{category}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>Title
+                      <input maxLength="120" value={complaintAction.title} onChange={(event) => setComplaintAction((current) => ({ ...current, title: event.target.value }))} />
+                    </label>
+                    <label>Description
+                      <textarea maxLength="5000" rows="3" value={complaintAction.description} onChange={(event) => setComplaintAction((current) => ({ ...current, description: event.target.value }))} />
+                    </label>
+                    <button className="button primary" type="button" disabled={working} onClick={prepareComplaintAction}>Review complaint</button>
+                  </div>
+                )}
+              </section>
+            )}
+            {working && <p role="status">Preparing your private, role-scoped response…</p>}
+            {mode === 'general' && isStudent && <button className="button secondary" disabled={working} onClick={findFreeTime} type="button">Find free time</button>}
+            {mode === 'general' && freeTime && <article className="assistant-answer"><span>{freeTime.day} · {freeTime.total_classes} classes</span><p>{freeTime.message}</p><ul>{freeTime.free_slots.map((slot) => <li key={slot.slot_label}>{slot.slot_label} · {slot.duration_display}</li>)}</ul></article>}
+            </div>
             <form className="assistant-form" onSubmit={ask}>
               <label htmlFor="assistant-message">Your question</label>
-              <textarea id="assistant-message" maxLength="500" onChange={(event) => setMessage(event.target.value)} required rows="3" value={message} />
-              <button className="button primary" disabled={working || !message.trim()} type="submit">{working ? 'Checking records…' : 'Ask assistant'}</button>
+              <div className={`assistant-composer ${['study', 'placement'].includes(mode) ? 'has-attachment' : ''}`}>
+                {mode === 'placement' && (
+                  <>
+                    <input
+                      accept=".pdf,.docx,.txt"
+                      aria-label={mode === 'study' ? 'Upload study document' : 'Upload job description or CV'}
+                      id="assistant-file"
+                      onChange={uploadAssistantDocument}
+                      type="file"
+                    />
+                    <label className="attachment-button" htmlFor="assistant-file" title="Attach a document">Attach</label>
+                  </>
+                )}
+                {mode === 'study' && (
+                  <label className="attachment-button" htmlFor="study-material-upload" title="Attach study material">Attach</label>
+                )}
+                <textarea
+                  id="assistant-message"
+                  maxLength="500"
+                  onChange={(event) => setMessage(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault()
+                      if (message.trim() && !working) event.currentTarget.form?.requestSubmit()
+                    }
+                  }}
+                  placeholder="Ask anything about your campus, studies, or placements..."
+                  required
+                  rows="2"
+                  value={message}
+                />
+                <button
+                  className="composer-icon-button"
+                  type="button"
+                  disabled={working}
+                  onClick={startVoiceInput}
+                  title={listening ? 'Listening…' : 'Voice input'}
+                >
+                  {listening ? 'Stop' : 'Mic'}
+                </button>
+                <button className="button primary" disabled={working || !message.trim()} type="submit">{working ? 'Sending…' : 'Send'}</button>
+              </div>
             </form>
-            {working && <p role="status">Checking your authorized campus records…</p>}
-            {isStudent && <button className="button secondary" disabled={working} onClick={findFreeTime} type="button">Find free time</button>}
-            {freeTime && <article className="assistant-answer"><span>{freeTime.day} · {freeTime.total_classes} classes</span><p>{freeTime.message}</p><ul>{freeTime.free_slots.map((slot) => <li key={slot.slot_label}>{slot.slot_label} · {slot.duration_display}</li>)}</ul></article>}
-            <div className="suggestion-list">
-              <strong>Try asking</strong>
-              {suggestions.map((suggestion) => <button key={suggestion} onClick={() => setMessage(suggestion)} type="button">{suggestion}</button>)}
-              <button className="button secondary" disabled={working} onClick={clearConversation} type="button">Clear chat</button>
-            </div>
           </section>
-          <aside className="panel assistant-summary">
-            <h2>Verified context</h2>
+          <details className="panel assistant-summary">
+            <summary>Verified academic context</summary>
             {isStudent ? <>
-              <p>{data?.freeTime?.linked ? 'Using the student timetable linked to your account.' : 'No linked student record found.'}</p>
+              <p>{data?.freeTime?.linked
+                ? 'Using the student timetable linked to your account.'
+                : data?.freeTime?.message || academicReport?.message || 'Student academic context is unavailable.'}</p>
+              {academicReport?.is_demo && (
+                <p className="muted">DEMO DATA: synthetic academic records, not official records.</p>
+              )}
               <Metric
                 label="Overall attendance"
                 value={academicReport?.attendance?.overall_percentage == null
@@ -1523,10 +2956,10 @@ function AssistantPage({ data, busy, error, reload, profile }) {
               <Metric label="Authorized students" value={data?.overview?.total_students_analyzed ?? '—'} />
             </>}
             <button className="button secondary" onClick={reload} type="button">Refresh context</button>
-          </aside>
+          </details>
         </div>
       )}
-    </>
+    </div>
   )
 }
 
@@ -2036,6 +3469,7 @@ function CampusApp() {
   const [token, setToken] = useState(() => sessionStorage.getItem('smart-campus-token') || '')
   const [profile, setProfile] = useState(null)
   const [page, setPage] = useState('overview')
+  const [lostFoundClaimId, setLostFoundClaimId] = useState('')
   const [data, setData] = useState({})
   const [busy, setBusy] = useState(false)
   const [pageError, setPageError] = useState('')
@@ -2090,12 +3524,14 @@ function CampusApp() {
         const calls = [
           apiRequest('/timetable/today', { token }),
           ...(profile.role === 'student' ? [apiRequest('/attendance/me', { token })] : []),
+          ...(profile.role === 'student' ? [apiRequest('/students/dashboard/me', { token })] : []),
           ...(profile.role === 'admin' ? [apiRequest('/admin/stats', { token })] : []),
         ]
         const values = await Promise.all(calls)
         result = {
           timetable: values[0],
           ...(profile.role === 'student' ? { attendance: values[1] } : {}),
+          ...(profile.role === 'student' ? { studentDashboard: values[2] } : {}),
           ...(profile.role === 'admin' ? { stats: values[1] } : {}),
         }
       } else if (page === 'profile') {
@@ -2133,6 +3569,8 @@ function CampusApp() {
         }
       } else if (page === 'complaints') {
         result = null
+      } else if (page === 'lost-found') {
+        result = null
       } else if (page === 'notifications') {
         result = profile.role === 'student'
           ? await apiRequest('/notifications', { token })
@@ -2153,6 +3591,10 @@ function CampusApp() {
           ])
           result = { timetable, overview }
         }
+      } else if (page === 'mood-check-in') {
+        result = await apiRequest('/assistant/mood/check-ins', { token })
+      } else if (page === 'mood-insights') {
+        result = await apiRequest('/assistant/mood/analytics', { token })
       } else if (page === 'intelligence') {
         result = await apiRequest('/academic-intelligence/overview', { token })
       } else if (page === 'admin') {
@@ -2207,6 +3649,9 @@ function CampusApp() {
 
   function logout() {
     if (profile?.id) {
+      for (const mode of ['general', 'placement', 'study', 'mood']) {
+        sessionStorage.removeItem(`smart-campus-assistant-${profile.role}-${profile.id}-${mode}`)
+      }
       sessionStorage.removeItem(`smart-campus-assistant-${profile.role}-${profile.id}`)
       sessionStorage.removeItem(`smart-campus-assistant-${profile.id}`)
     }
@@ -2215,6 +3660,13 @@ function CampusApp() {
     setProfile(null)
     setData({})
     setPage('overview')
+    setLostFoundClaimId('')
+  }
+
+  function openLostFoundClaim(claimId = '') {
+    setLostFoundClaimId(claimId || '')
+    setPageError('')
+    setPage('lost-found')
   }
 
   if (!token || !profile) return <AuthScreen onAuthenticated={loadProfile} />
@@ -2247,10 +3699,16 @@ function CampusApp() {
     pageContent = <TransportPage busy={pageBusy} data={currentData} error={pageError} profile={profile} reload={reloadPage} />
   } else if (page === 'complaints') {
     pageContent = <ComplaintsPage profile={profile} token={token} />
+  } else if (page === 'lost-found') {
+    pageContent = <LostAndFoundPage openClaimId={lostFoundClaimId} profile={profile} token={token} />
   } else if (page === 'notifications') {
-    pageContent = <NotificationsPage busy={pageBusy} data={currentData} error={pageError} profile={profile} reload={reloadPage} />
+    pageContent = <NotificationsPage busy={pageBusy} data={currentData} error={pageError} openLostFoundClaim={openLostFoundClaim} profile={profile} reload={reloadPage} />
   } else if (page === 'assistant') {
     pageContent = <AssistantPage key={`${profile.role}:${profile.id}`} busy={pageBusy} data={currentData} error={pageError} reload={reloadPage} profile={profile} />
+  } else if (page === 'mood-check-in') {
+    pageContent = <MoodCheckInPage busy={pageBusy} data={currentData} error={pageError} reload={reloadPage} token={token} />
+  } else if (page === 'mood-insights') {
+    pageContent = <MoodInsightsPage busy={pageBusy} data={currentData} error={pageError} />
   } else if (page === 'intelligence') {
     pageContent = <AcademicIntelligencePage busy={pageBusy} data={currentData} error={pageError} profile={profile} />
   } else {
@@ -2273,6 +3731,7 @@ function CampusApp() {
               key={id}
               onClick={() => {
                 setPageError('')
+                setLostFoundClaimId('')
                 setPage(id)
               }}
               type="button"
@@ -2296,8 +3755,8 @@ function CampusApp() {
             <button className="button secondary small" onClick={logout} type="button">Log out</button>
           </div>
         </header>
-        <div className="content">
-          <section className="page-heading">
+        <div className={`content ${page === 'assistant' ? 'content-assistant' : ''}`}>
+          {page !== 'assistant' && <section className="page-heading">
             <div><p className="eyebrow">{profile.role.toUpperCase()} WORKSPACE</p><h1>{selectedTitle}</h1></div>
             <button
               className="button secondary"
@@ -2311,9 +3770,13 @@ function CampusApp() {
             >
               Refresh
             </button>
-          </section>
-          {pageContent}
-          <footer className="page-footer">Smart Campus Management System · Express API at {API_BASE_URL}</footer>
+          </section>}
+          {page === 'assistant'
+            ? <div className="assistant-page-body">{pageContent}</div>
+            : <>
+              {pageContent}
+              <footer className="page-footer">Smart Campus Management System · Express API at {API_BASE_URL}</footer>
+            </>}
         </div>
       </main>
     </div>

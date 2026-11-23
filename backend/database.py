@@ -30,6 +30,17 @@ complaints_collection = database["complaints"]
 events_collection = database["events"]
 transport_collection = database["transport_routes"]
 notifications_collection = database["notifications"]
+lost_found_items_collection = database["lost_found_items"]
+lost_found_matches_collection = database["lost_found_matches"]
+lost_found_claims_collection = database["lost_found_claims"]
+assistant_conversations_collection = database["assistant_conversations"]
+assistant_confirmations_collection = database["assistant_confirmations"]
+placement_sessions_collection = database["placement_practice_sessions"]
+placement_progress_collection = database["placement_progress"]
+academic_progress_collection = database["academic_progress"]
+assignments_collection = database["assignments"]
+assistant_documents_collection = database["assistant_documents"]
+mood_check_ins_collection = database["assistant_mood_check_ins"]
 
 logger = logging.getLogger("smart_campus")
 
@@ -126,3 +137,63 @@ def ensure_indexes() -> None:
         unique=True,
     )
     _create_index(notifications_collection, [("student_id", ASCENDING), ("created_at", ASCENDING)], "student_notifications")
+    _create_index(lost_found_items_collection, [("user_id", ASCENDING)], "lost_found_user")
+    _create_index(
+        lost_found_items_collection,
+        [("report_type", ASCENDING), ("status", ASCENDING), ("event_timestamp", ASCENDING)],
+        "lost_found_matching_scope",
+    )
+    _create_index(
+        lost_found_matches_collection,
+        [("queried_report_id", ASCENDING), ("candidate_report_id", ASCENDING)],
+        "lost_found_match_pair",
+        unique=True,
+    )
+    _create_index(
+        lost_found_claims_collection,
+        [("match_id", ASCENDING), ("claimant_id", ASCENDING)],
+        "lost_found_claim_unique",
+        unique=True,
+    )
+    _create_index(
+        assistant_conversations_collection,
+        [("user_id", ASCENDING), ("updated_at", -1)],
+        "assistant_conversation_owner",
+    )
+    _create_index(
+        assistant_confirmations_collection,
+        [("expires_at", ASCENDING)],
+        "assistant_confirmation_expiry",
+        expireAfterSeconds=0,
+    )
+    _create_index(
+        placement_sessions_collection,
+        [("user_id", ASCENDING), ("created_at", -1)],
+        "placement_user_sessions",
+    )
+    _create_index(
+        placement_progress_collection,
+        [("user_id", ASCENDING)],
+        "placement_user_progress",
+        unique=True,
+    )
+    _create_index(
+        academic_progress_collection,
+        [("user_id", ASCENDING), ("updated_at", -1)],
+        "academic_user_progress",
+    )
+    _create_index(
+        assistant_documents_collection,
+        [("user_id", ASCENDING), ("purpose", ASCENDING), ("created_at", -1)],
+        "assistant_document_owner",
+    )
+    _create_index(
+        mood_check_ins_collection,
+        [("user_id", ASCENDING), ("created_at", -1)],
+        "assistant_mood_owner",
+    )
+    _create_index(
+        assignments_collection,
+        [("student_id", ASCENDING), ("due_date", ASCENDING)],
+        "student_assignment_due",
+    )

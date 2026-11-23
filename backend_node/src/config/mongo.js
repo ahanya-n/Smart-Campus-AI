@@ -16,6 +16,10 @@ const COLLECTIONS = Object.freeze({
   events: 'events',
   transportRoutes: 'transport_routes',
   notifications: 'notifications',
+  lostFoundItems: 'lost_found_items',
+  lostFoundMatches: 'lost_found_matches',
+  lostFoundClaims: 'lost_found_claims',
+  assignments: 'assignments',
 });
 
 let client;

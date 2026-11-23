@@ -1,6 +1,11 @@
 const express = require('express');
 const { ObjectId } = require('mongodb');
 const { ROLES } = require('../auth/users');
+const {
+  isTrustedDemoAccount,
+  isTrustedDemoStudent,
+  trustedDemoFilter,
+} = require('../dataFilters');
 
 const DAYS = Object.freeze([
   'Monday',
@@ -12,7 +17,6 @@ const DAYS = Object.freeze([
 ]);
 const CODE_PATTERN = /^[A-Za-z0-9-]{1,20}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
-const LOCAL_DEMO_SEED_MARKER = 'smart-campus-local-demo-v1';
 
 function entryOutput(document) {
   return {
@@ -254,15 +258,14 @@ function createTimetableRouter({
         query = {
           department: student.department,
           semester: semesterValue(student.semester),
-          ...(user.local_demo_seed === LOCAL_DEMO_SEED_MARKER &&
-          student.local_demo_seed === LOCAL_DEMO_SEED_MARKER
-            ? { is_demo: true, synthetic_demo: true }
-            : { is_demo: { $ne: true } }),
+          ...(isTrustedDemoAccount(user) && isTrustedDemoStudent(student)
+            ? trustedDemoFilter(user)
+            : { is_demo: { $ne: true }, synthetic_demo: { $ne: true } }),
         };
       } else {
         scope = role;
         linked = true;
-        const seededDemo = user.local_demo_seed === LOCAL_DEMO_SEED_MARKER;
+        const seededDemo = isTrustedDemoAccount(user);
         query = seededDemo
           ? { is_demo: true, synthetic_demo: true }
           : { is_demo: { $ne: true } };

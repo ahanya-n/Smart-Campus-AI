@@ -120,6 +120,24 @@ class ApiService {
         .toList();
   }
 
+  /// GET /dashboard/me — signed-in student dashboard summary.
+  Future<Map<String, dynamic>> getStudentDashboard() async {
+    final data = await _request('GET', '/dashboard/me', auth: _Auth.required);
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected student dashboard response.');
+    }
+    return data;
+  }
+
+  /// GET /assignments/me — signed-in student's own assignments.
+  Future<Map<String, dynamic>> getStudentAssignments() async {
+    final data = await _request('GET', '/assignments/me', auth: _Auth.required);
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected student assignment response.');
+    }
+    return data;
+  }
+
   /// GET /library/books — catalog search is performed by the backend.
   Future<List<LibraryBook>> getLibraryBooks({String search = ''}) async {
     final query = search.trim();
@@ -391,6 +409,181 @@ class ApiService {
     return data;
   }
 
+  Future<List<Map<String, dynamic>>> listAssistantConversations() async {
+    final data = await _request(
+      'GET',
+      '/assistant/conversations',
+      auth: _Auth.required,
+    );
+    if (data is! List) {
+      throw const ApiException('Unexpected conversation list response.');
+    }
+    return data
+        .whereType<Map>()
+        .map(
+          (item) => item.map((key, value) => MapEntry(key.toString(), value)),
+        )
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> createAssistantConversation() async {
+    final data = await _request(
+      'POST',
+      '/assistant/conversations',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected conversation response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> getAssistantConversation(
+    String conversationId,
+  ) async {
+    final data = await _request(
+      'GET',
+      '/assistant/conversations/${Uri.encodeComponent(conversationId)}',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected conversation response.');
+    }
+    return data;
+  }
+
+  Future<void> deleteAssistantConversation(String conversationId) async {
+    await _request(
+      'DELETE',
+      '/assistant/conversations/${Uri.encodeComponent(conversationId)}',
+      auth: _Auth.required,
+    );
+  }
+
+  Future<Map<String, dynamic>> prepareComplaintAction({
+    required String category,
+    required String title,
+    required String description,
+  }) async {
+    final data = await _request(
+      'POST',
+      '/assistant/actions/prepare',
+      body: {'category': category, 'title': title, 'description': description},
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected action preparation response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> confirmAssistantAction(
+    String confirmationId,
+  ) async {
+    final data = await _request(
+      'POST',
+      '/assistant/actions/${Uri.encodeComponent(confirmationId)}/confirm',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected action confirmation response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> cancelAssistantAction(
+    String confirmationId,
+  ) async {
+    final data = await _request(
+      'POST',
+      '/assistant/actions/${Uri.encodeComponent(confirmationId)}/cancel',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected action cancellation response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> createPlacementPractice({
+    required String topic,
+    required String difficulty,
+  }) async {
+    final data = await _request(
+      'POST',
+      '/assistant/placement/practice',
+      body: {'topic': topic, 'difficulty': difficulty},
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected placement practice response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> evaluatePlacementPractice(
+    String sessionId,
+    String answer,
+  ) async {
+    final data = await _request(
+      'POST',
+      '/assistant/placement/practice/${Uri.encodeComponent(sessionId)}/evaluate',
+      body: {'answer': answer},
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected placement evaluation response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> getPlacementProgress() async {
+    final data = await _request(
+      'GET',
+      '/assistant/placement/progress',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected placement progress response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> completeAcademicProgress({
+    required String subjectCode,
+    String? subjectName,
+    required int completedMinutes,
+    required String activity,
+  }) async {
+    final data = await _request(
+      'POST',
+      '/assistant/academic-progress/sessions',
+      body: {
+        'subject_code': subjectCode,
+        'subject_name': subjectName,
+        'completed_minutes': completedMinutes,
+        'activity': activity,
+      },
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected academic progress response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> getAcademicProgress() async {
+    final data = await _request(
+      'GET',
+      '/assistant/academic-progress',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected academic progress response.');
+    }
+    return data;
+  }
+
   /// GET /admin/users
   Future<List<Map<String, dynamic>>> getAdminUsers() async {
     final data = await _request('GET', '/admin/users', auth: _Auth.required);
@@ -501,12 +694,21 @@ class ApiService {
   /// POST /assistant/chat
   Future<Map<String, dynamic>> askAssistant(
     String message, {
+    String mode = 'general',
     String? day,
     List<Map<String, dynamic>> history = const [],
+    String? conversationId,
+    String? documentId,
   }) async {
-    final body = <String, dynamic>{'message': message};
+    final body = <String, dynamic>{'message': message, 'mode': mode};
     if (day != null) body['day'] = day;
     if (history.isNotEmpty) body['history'] = history;
+    if (conversationId != null && conversationId.isNotEmpty) {
+      body['conversation_id'] = conversationId;
+    }
+    if (documentId != null && documentId.isNotEmpty) {
+      body['document_id'] = documentId;
+    }
     final data = await _request(
       'POST',
       '/assistant/chat',
@@ -515,6 +717,230 @@ class ApiService {
     );
     if (data is! Map<String, dynamic>) {
       throw const ApiException('Unexpected assistant response from server.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> createMoodCheckIn(String mood) async {
+    final data = await _request(
+      'POST',
+      '/assistant/mood/check-ins',
+      body: {'mood': mood},
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected mood check-in response.');
+    }
+    return data;
+  }
+
+  Future<List<Map<String, dynamic>>> getMyMoodCheckIns() async {
+    final data = await _request(
+      'GET',
+      '/assistant/mood/check-ins',
+      auth: _Auth.required,
+    );
+    if (data is! Map || data['check_ins'] is! List) {
+      throw const ApiException('Unexpected mood check-in history response.');
+    }
+    return (data['check_ins'] as List)
+        .whereType<Map>()
+        .map(
+          (item) => item.map((key, value) => MapEntry(key.toString(), value)),
+        )
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> getMoodAnalytics() async {
+    final data = await _request(
+      'GET',
+      '/assistant/mood/analytics',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected mood analytics response.');
+    }
+    return data;
+  }
+
+  Future<List<Map<String, dynamic>>> getStudyDocuments() async {
+    final data = await _request(
+      'GET',
+      '/assistant/study/documents',
+      auth: _Auth.required,
+    );
+    if (data is! Map || data['documents'] is! List) {
+      throw const ApiException('Unexpected study document list response.');
+    }
+    return (data['documents'] as List)
+        .whereType<Map>()
+        .map(
+          (item) => item.map((key, value) => MapEntry(key.toString(), value)),
+        )
+        .toList();
+  }
+
+  Future<void> deleteStudyDocument(String documentId) async {
+    await _request(
+      'DELETE',
+      '/assistant/study/documents/${Uri.encodeComponent(documentId)}',
+      auth: _Auth.required,
+    );
+  }
+
+  Future<Map<String, dynamic>> uploadStudyDocument(String filePath) =>
+      _uploadAssistantDocument('/assistant/study/documents', filePath);
+
+  Future<Map<String, dynamic>> createStudyQuiz(String documentId) async {
+    final data = await _request(
+      'POST',
+      '/assistant/study/documents/${Uri.encodeComponent(documentId)}/quiz',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic> || data['questions'] is! List) {
+      throw const ApiException('Unexpected study quiz response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> analyzeStudyDocument(String documentId) async {
+    final data = await _request(
+      'POST',
+      '/assistant/study/documents/${Uri.encodeComponent(documentId)}/analysis',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected study document analysis response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> researchPlacement({
+    required String careerGoal,
+    String? jobDescription,
+    bool allowExternalProcessing = false,
+  }) async {
+    final data = await _request(
+      'POST',
+      '/assistant/placement/research',
+      body: {
+        'career_goal': careerGoal,
+        if (jobDescription != null && jobDescription.trim().isNotEmpty)
+          'job_description': jobDescription.trim(),
+        'allow_external_processing': allowExternalProcessing,
+      },
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected placement research response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> uploadPlacementDocument(String filePath) =>
+      _uploadAssistantDocument('/assistant/placement/documents', filePath);
+
+  Future<List<Map<String, dynamic>>> getPlacementDocuments() async {
+    final data = await _request(
+      'GET',
+      '/assistant/placement/documents',
+      auth: _Auth.required,
+    );
+    if (data is! Map || data['documents'] is! List) {
+      throw const ApiException('Unexpected placement document list response.');
+    }
+    return (data['documents'] as List)
+        .whereType<Map>()
+        .map(
+          (item) => item.map((key, value) => MapEntry(key.toString(), value)),
+        )
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> analyzePlacementDocument(
+    String documentId,
+  ) async {
+    final data = await _request(
+      'POST',
+      '/assistant/placement/documents/${Uri.encodeComponent(documentId)}/analysis',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException(
+        'Unexpected placement document analysis response.',
+      );
+    }
+    return data;
+  }
+
+  Future<void> deletePlacementDocument(String documentId) async {
+    await _request(
+      'DELETE',
+      '/assistant/placement/documents/${Uri.encodeComponent(documentId)}',
+      auth: _Auth.required,
+    );
+  }
+
+  Future<Map<String, dynamic>> analyzePlacementJobDescription(
+    String jobDescription,
+  ) async {
+    final data = await _request(
+      'POST',
+      '/assistant/placement/job-description/analysis',
+      body: {'job_description': jobDescription},
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected job description analysis response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> _uploadAssistantDocument(
+    String path,
+    String filePath,
+  ) async {
+    final filename = filePath.replaceAll('\\', '/').split('/').last;
+    final extension = filename.contains('.')
+        ? filename.split('.').last.toLowerCase()
+        : '';
+    if (!const {'pdf', 'docx', 'txt'}.contains(extension)) {
+      throw const ApiException('Choose a PDF, DOCX, or TXT file.');
+    }
+    final file = File(filePath);
+    final int length;
+    try {
+      length = await file.length();
+    } on FileSystemException {
+      throw const ApiException('The selected file could not be read.');
+    }
+    if (length <= 0) {
+      throw const ApiException(
+        'The selected document is empty or unavailable.',
+      );
+    }
+    if (length > 5 * 1024 * 1024) {
+      throw const ApiException('Documents must be 5 MB or smaller.');
+    }
+
+    final token = await _tokenStorage.readToken();
+    if (token == null || token.isEmpty) {
+      throw const ApiException('You are not signed in.', statusCode: 401);
+    }
+    final uri = Uri.parse('$baseUrl$path');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers.addAll({
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+      });
+    try {
+      request.files.add(await http.MultipartFile.fromPath('file', filePath));
+    } on FileSystemException {
+      throw const ApiException('The selected file could not be read.');
+    }
+    final data = await _sendRequest(request, 'POST', uri);
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected document upload response.');
     }
     return data;
   }
@@ -687,6 +1113,14 @@ class ApiService {
     final request = http.Request(method, uri)..headers.addAll(headers);
     if (body != null) request.body = jsonEncode(body);
 
+    return _sendRequest(request, method, uri);
+  }
+
+  Future<dynamic> _sendRequest(
+    http.BaseRequest request,
+    String method,
+    Uri uri,
+  ) async {
     if (kDebugMode) debugPrint('[api] -> $method $uri');
 
     final http.Response response;

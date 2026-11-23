@@ -56,3 +56,31 @@ node_modules/
 .dart_tool/
 build/
 SMART_CAMPUS_FINAL_RUN_AND_CREDENTIALS_GUIDE.md
+
+# Local data and generated uploads
+/backend/realistic-demo-credentials.local.json
+/backend_node/uploads/
+dump/
+dumps/
+*.bson
+*.metadata.json
+*.sql
+
+# Private keys, certificates, and signing configuration
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+key.properties
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.iml
+*.swp
+
+# Python coverage output
+.coverage
+htmlcov/

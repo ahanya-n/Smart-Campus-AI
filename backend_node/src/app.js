@@ -10,6 +10,7 @@ const { createTimetableRouter } = require('./routes/timetableRoutes');
 const { createLibraryRouter } = require('./routes/libraryRoutes');
 const { createTransportRouter } = require('./routes/transportRoutes');
 const { createComplaintRouter } = require('./routes/complaintRoutes');
+const { createLostFoundRouter } = require('./routes/lostFoundRoutes');
 const { createAcademicIntelligenceRouter } = require('./routes/academicIntelligenceRoutes');
 const { createAuthMiddleware } = require('./middleware/auth');
 const { COLLECTIONS, connectMongo } = require('./config/mongo');
@@ -42,13 +43,24 @@ function createApp({
     (await connectMongo(env)).collection(COLLECTIONS.transportRoutes),
   getComplaintsCollection = async () =>
     (await connectMongo(env)).collection(COLLECTIONS.complaints),
+  getLostFoundItemsCollection = async () =>
+    (await connectMongo(env)).collection(COLLECTIONS.lostFoundItems),
+  getLostFoundMatchesCollection = async () =>
+    (await connectMongo(env)).collection(COLLECTIONS.lostFoundMatches),
+  getLostFoundClaimsCollection = async () =>
+    (await connectMongo(env)).collection(COLLECTIONS.lostFoundClaims),
+  getAssignmentsCollection = async () =>
+    (await connectMongo(env)).collection(COLLECTIONS.assignments),
+  getMarksCollection = async () =>
+    (await connectMongo(env)).collection('marks'),
   fetchAcademicIntelligence = globalThis.fetch,
   fetchAssistant = globalThis.fetch,
+  lostFoundUploadDir,
 } = {}) {
   const app = express();
 
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '8mb' }));
 
   app.get('/api/health', (_request, response) => {
     response.status(200).json({
@@ -69,6 +81,11 @@ function createApp({
     ...authMiddleware,
     getStudentsCollection,
     getTimetableCollection,
+    getAttendanceCollection,
+    getAttendanceEntriesCollection,
+    getAssignmentsCollection,
+    getMarksCollection,
+    getNotificationsCollection,
   }));
   app.use('/api/attendance', createAttendanceRouter({
     ...authMiddleware,
@@ -96,6 +113,19 @@ function createApp({
     ...authMiddleware,
     getComplaintsCollection,
     getUsersCollection,
+  }));
+  app.use('/api/lost-found', createLostFoundRouter({
+    ...authMiddleware,
+    getLostFoundItemsCollection,
+    getLostFoundMatchesCollection,
+    getLostFoundClaimsCollection,
+    getNotificationsCollection,
+    getUsersCollection,
+    uploadDir: lostFoundUploadDir,
+    aiServiceBaseUrl: env.LOST_FOUND_AI_BASE_URL,
+    aiInternalKey: env.LOST_FOUND_INTERNAL_KEY,
+    highConfidenceThreshold: env.LOST_FOUND_HIGH_CONFIDENCE_THRESHOLD,
+    minimumMatchThreshold: env.LOST_FOUND_MINIMUM_MATCH_THRESHOLD,
   }));
   app.use('/api/notifications', createNotificationRouter({
     ...authMiddleware,

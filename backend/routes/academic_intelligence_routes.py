@@ -189,13 +189,28 @@ def _get_authorized_student(
 @router.get("/me")
 def my_academic_report(user: dict = Depends(require_roles("student"))):
     student = find_linked_student(user)
-    if student is None:
+    if student is None or (
+        (student.get("is_demo") is True or student.get("synthetic_demo") is True)
+        and not is_local_demo_student(student)
+    ):
+        message = (
+            "Your account is linked to a synthetic/demo student profile. "
+            "Official academic records are unavailable; ask a college administrator "
+            "to verify and relink your account."
+            if student is not None
+            else "Link your student record to view your academic report."
+        )
+        reason = (
+            "The linked student profile is synthetic/demo data; official academic data is unavailable."
+            if student is not None
+            else "Student record is not linked; academic data is unavailable."
+        )
         return {
             "linked": False,
-            "message": "Link your student record to view your academic report.",
+            "message": message,
             "classification_type": "explainable_rule_based_baseline",
             "risk_level": "insufficient_data",
-            "risk_reasons": ["Student record is not linked; academic data is unavailable."],
+            "risk_reasons": [reason],
         }
     return {
         "linked": True,

@@ -51,7 +51,10 @@ def _validated_mark(mark: dict) -> tuple[str, float] | None:
     assessment_date = mark.get("assessment_date")
     if assessment_date is not None:
         try:
-            if date.fromisoformat(str(assessment_date)) > date.today():
+            date_text = str(assessment_date).strip()
+            if "T" in date_text:
+                date_text = date_text.split("T", 1)[0]
+            if date.fromisoformat(date_text) > date.today():
                 return None
         except (TypeError, ValueError):
             return None

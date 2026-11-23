@@ -1,12 +1,16 @@
 const express = require('express');
 const { ObjectId } = require('mongodb');
 const { ROLES } = require('../auth/users');
+const {
+  isTrustedDemoAccount,
+  isTrustedDemoStudent,
+  trustedDemoFilter,
+} = require('../dataFilters');
 
 const CODE_PATTERN = /^[A-Za-z0-9-]{1,20}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 const STATUSES = Object.freeze(['present', 'absent']);
 const DEMO_STUDENT_ID = 'MCA001';
-const LOCAL_DEMO_SEED_MARKER = 'smart-campus-local-demo-v1';
 const LOW_ATTENDANCE_THRESHOLD = 75;
 const NOT_LINKED_MESSAGE =
   'Your account is not linked to a student record yet. Ask the college admin for a link code, or view the demo data instead.';
@@ -89,7 +93,7 @@ function studentContextQuery(studentId, demo, seededDemo = false) {
 }
 
 function isLocalDemoAccount(user) {
-  return user?.local_demo_seed === LOCAL_DEMO_SEED_MARKER;
+  return isTrustedDemoAccount(user);
 }
 
 async function buildReport({
@@ -249,7 +253,7 @@ function createAttendanceRouter({
       const context = await getStudentContext(request.user, demo);
       const seededDemo =
         isLocalDemoAccount(request.user) &&
-        context.student?.local_demo_seed === LOCAL_DEMO_SEED_MARKER;
+        isTrustedDemoStudent(context.student);
       const query = studentContextQuery(context.student?.student_id, demo, seededDemo);
       return response.json(await buildReport({
         ...context,
@@ -271,7 +275,7 @@ function createAttendanceRouter({
       const context = await getStudentContext(request.user, demo);
       const seededDemo =
         isLocalDemoAccount(request.user) &&
-        context.student?.local_demo_seed === LOCAL_DEMO_SEED_MARKER;
+        isTrustedDemoStudent(context.student);
       const query = studentContextQuery(context.student?.student_id, demo, seededDemo);
       const report = await buildReport({
         ...context,
@@ -534,7 +538,7 @@ function createAttendanceRouter({
       }
       const seededDemo =
         isLocalDemoAccount(request.user) &&
-        student.local_demo_seed === LOCAL_DEMO_SEED_MARKER;
+        isTrustedDemoStudent(student);
       const query = {
         student_id: studentId,
         is_demo: seededDemo ? true : { $ne: true },

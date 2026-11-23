@@ -1,12 +1,10 @@
-import os
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import jwt
-from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from auth_config import get_jwt_config
 from dependencies.auth import get_current_user, require_roles
 from services.link_codes import redeem_code
 from services.user_service import (
@@ -17,12 +15,6 @@ from services.user_service import (
     public_user,
     verify_password,
 )
-
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
-JWT_SECRET = os.getenv("JWT_SECRET")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-TOKEN_EXPIRE_MINUTES = int(os.getenv("TOKEN_EXPIRE_MINUTES", "60"))
 
 router = APIRouter(tags=["Authentication"])
 
@@ -64,21 +56,18 @@ class LinkStudentRequest(BaseModel):
     link_code: str = Field(min_length=4, max_length=32)
 
 
-def create_access_token(subject: str) -> str:
-    if not JWT_SECRET or JWT_SECRET == "change-me":
-        raise HTTPException(
-            status_code=500,
-            detail="JWT_SECRET is not configured"
-        )
+def create_access_token(subject: str, role: str = "student") -> str:
+    config = get_jwt_config()
 
     now = datetime.now(timezone.utc)
     payload = {
         "sub": subject,
         "iat": now,
-        "exp": now + timedelta(minutes=TOKEN_EXPIRE_MINUTES)
+        "exp": now + timedelta(minutes=config["expires_in_minutes"]),
+        "role": role if role in ("student", "faculty", "admin") else "student",
     }
 
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, config["secret"], algorithm=config["algorithm"])
 
 
 @router.post("/register")
@@ -115,7 +104,7 @@ def login_user(credentials: LoginRequest):
             headers={"WWW-Authenticate": "Bearer"}
         )
 
-    access_token = create_access_token(str(user["_id"]))
+    access_token = create_access_token(str(user["_id"]), user.get("role", "student"))
 
     return {
         "access_token": access_token,

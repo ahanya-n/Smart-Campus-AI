@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { Readable } = require('node:stream');
 const jwt = require('jsonwebtoken');
 const request = require('supertest');
 const { ObjectId } = require('mongodb');
@@ -93,4 +94,99 @@ test('assistant proxy requires authentication', async () => {
   const response = await request(app).get('/api/assistant/free-time');
   assert.equal(response.status, 401);
   assert.equal(called, false);
+});
+
+test('assistant proxy forwards conversation and action routes', async () => {
+  const forwarded = [];
+  const { app, token } = setup(async (url, options) => {
+    forwarded.push({ url: String(url), options });
+    if (String(url).includes('/assistant/conversations')) {
+      return upstream(200, [{ id: '507f1f77bcf86cd799439011', title: 'New conversation' }]);
+    }
+    return upstream(200, { success: true });
+  });
+
+  const conversation = await request(app)
+    .get('/api/assistant/conversations')
+    .set('Authorization', `Bearer ${token}`);
+  assert.equal(conversation.status, 200);
+  assert.equal(conversation.body[0].title, 'New conversation');
+
+  const prepared = await request(app)
+    .post('/api/assistant/actions/prepare')
+    .set('Authorization', `Bearer ${token}`)
+    .send({
+      category: 'facilities',
+      title: 'Library issue',
+      description: 'The library desk needs maintenance.',
+    });
+  assert.equal(prepared.status, 200);
+  assert.equal(forwarded.length, 2);
+  assert.equal(forwarded[1].options.signal !== undefined, true);
+});
+
+test('assistant proxy forwards authenticated multipart uploads without parsing file bytes as JSON', async () => {
+  let forwarded;
+  const { app, token } = setup(async (url, options) => {
+    forwarded = { url: String(url), options };
+    return upstream(201, { id: 'private-document-id' });
+  });
+
+  const response = await request(app)
+    .post('/api/assistant/study/documents')
+    .set('Authorization', `Bearer ${token}`)
+    .attach('file', Buffer.from('study material'), {
+      filename: 'notes.txt',
+      contentType: 'text/plain',
+    });
+
+  assert.equal(response.status, 201);
+  assert.equal(forwarded.url, 'http://fastapi.test/assistant/study/documents');
+  assert.match(forwarded.options.headers['content-type'], /^multipart\/form-data; boundary=/);
+  assert.ok(forwarded.options.body instanceof Readable);
+  assert.equal(forwarded.options.duplex, 'half');
+});
+
+test('assistant proxy rejects oversized multipart uploads before forwarding', async () => {
+  let called = false;
+  const { app, token } = setup(async () => {
+    called = true;
+    return upstream(201, {});
+  });
+  const response = await request(app)
+    .post('/api/assistant/study/documents')
+    .set('Authorization', `Bearer ${token}`)
+    .attach('file', Buffer.alloc(5 * 1024 * 1024 + 64 * 1024), {
+      filename: 'oversized.txt',
+      contentType: 'text/plain',
+    });
+
+  assert.equal(response.status, 413);
+  assert.equal(called, false);
+});
+
+test('assistant proxy preserves binary downloads and their filename', async () => {
+  const expected = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0xff]);
+  const { app, token } = setup(async () => ({
+    status: 200,
+    headers: {
+      get: (name) => ({
+        'content-type': 'application/pdf',
+        'content-disposition': 'attachment; filename="career-plan.pdf"',
+      }[name]),
+    },
+    arrayBuffer: async () => expected.buffer.slice(
+      expected.byteOffset,
+      expected.byteOffset + expected.byteLength,
+    ),
+  }));
+  const response = await request(app)
+    .get('/api/assistant/placement/documents/plan/download')
+    .set('Authorization', `Bearer ${token}`)
+    .buffer(true);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers['content-type'], 'application/pdf');
+  assert.equal(response.headers['content-disposition'], 'attachment; filename="career-plan.pdf"');
+  assert.deepEqual(response.body, expected);
 });

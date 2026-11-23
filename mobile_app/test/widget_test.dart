@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -49,7 +50,11 @@ http.Response _json(Object body, [int status = 200]) => http.Response(
 MockClient _fakeBackend({
   List<Map<String, dynamic>>? students,
   List<Map<String, dynamic>>? complaintsSeed,
+  List<Map<String, dynamic>>? conversationsSeed,
+  List<Map<String, dynamic>>? studyDocumentsSeed,
   String userRole = 'student',
+  void Function(http.Request request)? onAssistantChat,
+  Map<String, dynamic> Function(http.Request request)? onPlacementResearch,
 }) {
   String? linkedStudentId;
   final complaints = [
@@ -66,6 +71,16 @@ MockClient _fakeBackend({
     'available_copies': 2,
   };
   final libraryLoans = <Map<String, dynamic>>[];
+  final moodCheckIns = <Map<String, dynamic>>[];
+  final studyDocuments = [
+    for (final document in studyDocumentsSeed ?? const <Map<String, dynamic>>[])
+      Map<String, dynamic>.from(document),
+  ];
+  final assistantConversations = [
+    for (final conversation
+        in conversationsSeed ?? const <Map<String, dynamic>>[])
+      Map<String, dynamic>.from(conversation),
+  ];
   final transportRoute = <String, dynamic>{
     'id': '1234567890abcdef12345678',
     'route_number': 'TEST-1',
@@ -133,6 +148,41 @@ MockClient _fakeBackend({
               },
             ],
       );
+    }
+    if (request.method == 'GET' && path == '/dashboard/me') {
+      if (auth != 'Bearer $_fakeToken') {
+        return _json({'detail': 'Not authenticated'}, 401);
+      }
+      return _json({
+        'profile': {
+          'name': 'Asha Rao',
+          'email': 'asha@example.com',
+          'student_id': 'MCA001',
+          'roll_number': 'MCA001',
+          'department': 'MCA',
+          'course': 'MCA',
+          'semester': 1,
+          'section': 'A',
+        },
+        'attendance': {
+          'percentage': 82.5,
+          'present_classes': 33,
+          'total_classes': 40,
+          'subject_count': 5,
+        },
+        'cgpa': 8.25,
+        'study_streak': 4,
+        'timetable': {'today': 'Monday', 'entries': []},
+        'marks': [],
+        'assignments': {
+          'total': 2,
+          'pending': 2,
+          'submitted': 0,
+          'upcoming': [],
+        },
+        'notifications': [],
+        'is_demo': false,
+      });
     }
     if (path == '/complaints') {
       if (auth != 'Bearer $_fakeToken') {
@@ -252,17 +302,157 @@ MockClient _fakeBackend({
       }
       return _json(demo ? _demoTimetable : _unlinkedTimetable);
     }
+    if (path == '/assistant/conversations') {
+      if (auth != 'Bearer $_fakeToken') {
+        return _json({'detail': 'Not authenticated'}, 401);
+      }
+      if (request.method == 'GET') return _json(assistantConversations);
+      if (request.method == 'POST') {
+        final id =
+            'assistant-conversation-${assistantConversations.length + 1}';
+        final conversation = <String, dynamic>{
+          'id': id,
+          'title': 'New conversation',
+          'messages': <Map<String, dynamic>>[],
+        };
+        assistantConversations.insert(0, conversation);
+        return _json(conversation);
+      }
+    }
+    if (path.startsWith('/assistant/conversations/')) {
+      if (auth != 'Bearer $_fakeToken') {
+        return _json({'detail': 'Not authenticated'}, 401);
+      }
+      final id = path.split('/').last;
+      final index = assistantConversations.indexWhere(
+        (conversation) => conversation['id'] == id,
+      );
+      if (index < 0) return _json({'detail': 'Conversation not found'}, 404);
+      if (request.method == 'GET') return _json(assistantConversations[index]);
+      if (request.method == 'DELETE') {
+        assistantConversations.removeAt(index);
+        return _json({'deleted': true, 'id': id});
+      }
+    }
+    if (path == '/assistant/mood/check-ins') {
+      if (auth != 'Bearer $_fakeToken') {
+        return _json({'detail': 'Not authenticated'}, 401);
+      }
+      if (request.method == 'GET') return _json({'check_ins': moodCheckIns});
+      if (request.method == 'POST') {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final checkIn = {
+          'id': 'synthetic-mood-${moodCheckIns.length + 1}',
+          'mood': body['mood'],
+          'sentiment': body['mood'] == 'low' || body['mood'] == 'very_low'
+              ? 'negative'
+              : 'neutral',
+          'score': body['mood'] == 'low'
+              ? 2
+              : body['mood'] == 'very_low'
+              ? 1
+              : 3,
+          'created_at': DateTime.now().toUtc().toIso8601String(),
+          if (body['mood'] == 'low' || body['mood'] == 'very_low')
+            'support_message': 'This check-in is not a diagnosis. Consider reaching out to someone you trust.',
+        };
+        moodCheckIns.insert(0, checkIn);
+        return _json(checkIn, 201);
+      }
+    }
+    if (request.method == 'GET' && path == '/assistant/mood/analytics') {
+      if (auth != 'Bearer $_fakeToken' ||
+          (userRole != 'admin' && userRole != 'faculty')) {
+        return _json({'detail': 'Not authorized'}, 403);
+      }
+      return _json({
+        'suppressed': false,
+        'minimum_group_size': 5,
+        'groups': <Map<String, dynamic>>[],
+      });
+    }
+    if (path == '/assistant/study/documents') {
+      if (auth != 'Bearer $_fakeToken' || userRole != 'student') {
+        return _json({'detail': 'Not authorized'}, 403);
+      }
+      if (request.method == 'GET') return _json({'documents': studyDocuments});
+      if (request.method == 'POST') {
+        final document = <String, dynamic>{
+          'id': 'study-document-${studyDocuments.length + 1}',
+          'filename': 'study_material.txt',
+          'summary': 'A private study document summary.',
+          'word_count': 9,
+        };
+        studyDocuments.insert(0, document);
+        return _json(document, 201);
+      }
+    }
+    if (path.startsWith('/assistant/study/documents/')) {
+      if (auth != 'Bearer $_fakeToken' || userRole != 'student') {
+        return _json({'detail': 'Not authorized'}, 403);
+      }
+      if (request.method == 'DELETE') {
+        final id = path.split('/')[4];
+        studyDocuments.removeWhere((document) => document['id'] == id);
+        return _json({'deleted': true, 'id': id});
+      }
+      if (request.method == 'POST' && path.endsWith('/quiz')) {
+        return _json({
+          'questions': [
+            {'question': 'Complete the statement: ____', 'answer': 'local'},
+          ],
+        });
+      }
+    }
+    if (request.method == 'POST' && path == '/assistant/placement/documents') {
+      return _json({
+        'id': 'private-resume-1',
+        'filename': 'study_material.txt',
+        'summary': 'Private resume content.',
+      }, 201);
+    }
+    if (request.method == 'GET' && path == '/assistant/study/documents') {
+      if (auth != 'Bearer $_fakeToken') {
+        return _json({'detail': 'Not authenticated'}, 401);
+      }
+      return _json({'documents': <Map<String, dynamic>>[]});
+    }
+    if (request.method == 'POST' && path == '/assistant/placement/research') {
+      final response = onPlacementResearch?.call(request);
+      if (response != null) return _json(response);
+      return _json({
+        'available': false,
+        'summary': null,
+        'sources': <Map<String, dynamic>>[],
+        'reason': 'Grounded web search is not available from the configured AI provider.',
+      });
+    }
     if (request.method == 'POST' && path == '/assistant/chat') {
       if (auth != 'Bearer $_fakeToken') {
         return _json({'detail': 'Not authenticated'}, 401);
       }
+      onAssistantChat?.call(request);
       final body = jsonDecode(request.body) as Map<String, dynamic>;
+      final conversationId =
+          body['conversation_id']?.toString() ??
+          'chat-conversation-${assistantConversations.length + 1}';
+      if (!assistantConversations.any(
+        (conversation) => conversation['id'] == conversationId,
+      )) {
+        assistantConversations.insert(0, {
+          'id': conversationId,
+          'title': body['message']?.toString() ?? 'Conversation',
+          'messages': <Map<String, dynamic>>[],
+        });
+      }
       final msg = (body['message'] ?? '').toString();
       if (msg.contains('attendance')) {
         return _json({
           'reply': 'Your overall attendance is 77.6% (59/76 classes attended).',
           'intent': 'attendance',
           'provider': 'grounded_rule_engine',
+          'conversation_id': conversationId,
+          'mode': body['mode'] ?? 'general',
           'day': 'Monday',
           'data_summary': {
             'linked': true,
@@ -282,6 +472,8 @@ MockClient _fakeBackend({
         'reply': 'You have 90 mins of free time between classes on Monday (10:00 - 11:30).',
         'intent': 'free_time',
         'provider': 'grounded_rule_engine',
+        'conversation_id': conversationId,
+        'mode': body['mode'] ?? 'general',
         'day': 'Monday',
         'data_summary': {
           'linked': true,
@@ -896,7 +1088,9 @@ void main() {
       expect(find.text('There are no classes on Saturday.'), findsOneWidget);
     });
 
-    testWidgets('dashboard tiles open the live screens', (tester) async {
+    testWidgets('student dashboard displays the redesigned overview', (
+      tester,
+    ) async {
       final storage = FakeTokenStorage(_fakeToken);
       final api = ApiService(tokenStorage: storage, client: _fakeBackend());
       await tester.pumpWidget(
@@ -908,19 +1102,11 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
 
-      await tester.ensureVisible(find.text('Attendance'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Attendance'));
-      await tester.pumpAndSettle();
-      expect(find.text('Account not linked'), findsOneWidget);
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-
-      await tester.ensureVisible(find.text('Timetable'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Timetable'));
-      await tester.pumpAndSettle();
-      expect(find.text('Account not linked'), findsOneWidget);
+      expect(find.text('MAKE TODAY A STEP FORWARD'), findsOneWidget);
+      expect(find.text('Attendance'), findsWidgets);
+      expect(find.text('CGPA'), findsOneWidget);
+      expect(find.text('Assignments'), findsOneWidget);
+      expect(find.text('Study streak'), findsOneWidget);
     });
   });
 
@@ -974,34 +1160,37 @@ void main() {
       );
     }
 
-    test('API parses history and returns a newly submitted complaint', () async {
-      final storage = FakeTokenStorage(_fakeToken);
-      final api = ApiService(
-        tokenStorage: storage,
-        client: _fakeBackend(
-          complaintsSeed: [
-            {
-              'id': 'complaint-synthetic-1',
-              'category': 'facilities',
-              'title': 'Broken classroom light',
-              'description': 'The light in room B12 is not working.',
-              'status': 'resolved',
-              'created_at': '2025-01-01T00:00:00Z',
-              'responses': [],
-            },
-          ],
-        ),
-      );
+    test(
+      'API parses history and returns a newly submitted complaint',
+      () async {
+        final storage = FakeTokenStorage(_fakeToken);
+        final api = ApiService(
+          tokenStorage: storage,
+          client: _fakeBackend(
+            complaintsSeed: [
+              {
+                'id': 'complaint-synthetic-1',
+                'category': 'facilities',
+                'title': 'Broken classroom light',
+                'description': 'The light in room B12 is not working.',
+                'status': 'resolved',
+                'created_at': '2025-01-01T00:00:00Z',
+                'responses': [],
+              },
+            ],
+          ),
+        );
 
-      expect((await api.getComplaints()).single.status, 'resolved');
-      final created = await api.createComplaint(
-        category: 'academic',
-        title: 'Schedule question',
-        description: 'Please clarify the published schedule.',
-      );
-      expect(created.title, 'Schedule question');
-      expect(created.status, 'pending');
-    });
+        expect((await api.getComplaints()).single.status, 'resolved');
+        final created = await api.createComplaint(
+          category: 'academic',
+          title: 'Schedule question',
+          description: 'Please clarify the published schedule.',
+        );
+        expect(created.title, 'Schedule question');
+        expect(created.status, 'pending');
+      },
+    );
 
     testWidgets('empty state, validation and complaint submission work', (
       tester,
@@ -1078,8 +1267,14 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Synthetic Campus Staff'), findsWidgets);
-      expect(find.textContaining('The repair has been completed.'), findsOneWidget);
-      expect(find.text('Resolution notes: The lamp was replaced.'), findsOneWidget);
+      expect(
+        find.textContaining('The repair has been completed.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Resolution notes: The lamp was replaced.'),
+        findsOneWidget,
+      );
     });
   });
 
@@ -1530,16 +1725,266 @@ void main() {
       );
 
       expect(sentBody?['message'], 'Who is taking it?');
+      expect(sentBody?['mode'], 'general');
       expect(sentBody?['history'], history);
       expect(response['intent'], 'faculty_details');
     });
 
-    Widget wrap(Widget screen) {
+    test('assistant API forwards the selected mode', () async {
+      Map<String, dynamic>? sentBody;
+      final api = ApiService(
+        tokenStorage: FakeTokenStorage(_fakeToken),
+        client: MockClient((request) async {
+          sentBody = jsonDecode(request.body) as Map<String, dynamic>;
+          return _json({'reply': 'Study reply'});
+        }),
+      );
+
+      await api.askAssistant('Help me revise', mode: 'study');
+
+      expect(sentBody?['mode'], 'study');
+    });
+
+    test(
+      'placement research sends optional job details and external consent',
+      () async {
+        final sentBodies = <Map<String, dynamic>>[];
+        final api = ApiService(
+          tokenStorage: FakeTokenStorage(_fakeToken),
+          client: MockClient((request) async {
+            sentBodies.add(jsonDecode(request.body) as Map<String, dynamic>);
+            return _json({
+              'available': false,
+              'summary': null,
+              'sources': <Map<String, dynamic>>[],
+              'reason': 'Search is unavailable.',
+            });
+          }),
+        );
+
+        await api.researchPlacement(
+          careerGoal: 'Data analyst',
+          jobDescription: 'SQL and Python experience',
+        );
+        await api.researchPlacement(
+          careerGoal: 'Data analyst',
+          jobDescription: ' SQL and Python experience ',
+          allowExternalProcessing: true,
+        );
+
+        expect(sentBodies, [
+          {
+            'career_goal': 'Data analyst',
+            'job_description': 'SQL and Python experience',
+            'allow_external_processing': false,
+          },
+          {
+            'career_goal': 'Data analyst',
+            'job_description': 'SQL and Python experience',
+            'allow_external_processing': true,
+          },
+        ]);
+      },
+    );
+
+    test(
+      'private assistant APIs use the agreed authenticated endpoints',
+      () async {
+        final requests = <http.BaseRequest>[];
+        final api = ApiService(
+          tokenStorage: FakeTokenStorage(_fakeToken),
+          client: MockClient((request) async {
+            requests.add(request);
+            switch (request.url.path) {
+              case '/assistant/mood/check-ins':
+                if (request.method == 'POST') {
+                  return _json({'id': 'check-in-1', 'mood': 'good'});
+                }
+                return _json({'check_ins': <Map<String, dynamic>>[]});
+              case '/assistant/mood/analytics':
+                return _json({
+                  'suppressed': false,
+                  'minimum_group_size': 5,
+                  'groups': <Map<String, dynamic>>[],
+                });
+              case '/assistant/study/documents':
+                return _json({'documents': <Map<String, dynamic>>[]});
+              case '/assistant/study/documents/document-1':
+                return _json({'deleted': true, 'id': 'document-1'});
+              case '/assistant/study/documents/document-1/quiz':
+                return _json({
+                  'questions': [
+                    {'question': 'Question?', 'answer': 'Answer'},
+                  ],
+                });
+              case '/assistant/placement/research':
+                return _json({
+                  'available': false,
+                  'summary': null,
+                  'sources': <Map<String, dynamic>>[],
+                  'reason': 'Search is unavailable.',
+                });
+              case '/assistant/placement/documents/document-1/analysis':
+                return _json({
+                  'technical_skills': ['Python'],
+                });
+              case '/assistant/placement/documents/document-1':
+                return _json({'deleted': true, 'id': 'document-1'});
+              case '/assistant/placement/documents':
+                return _json({'documents': <Map<String, dynamic>>[]});
+              case '/assistant/placement/job-description/analysis':
+                return _json({
+                  'explicit_requirements': ['Python required'],
+                });
+            }
+            return _json({'detail': 'Not found'}, 404);
+          }),
+        );
+
+        expect((await api.createMoodCheckIn('good'))['mood'], 'good');
+        expect(await api.getMyMoodCheckIns(), isEmpty);
+        expect((await api.getMoodAnalytics())['minimum_group_size'], 5);
+        expect(await api.getStudyDocuments(), isEmpty);
+        expect(await api.getPlacementDocuments(), isEmpty);
+        await api.deleteStudyDocument('document-1');
+        expect(
+          (await api.createStudyQuiz('document-1'))['questions'],
+          hasLength(1),
+        );
+        final research = await api.researchPlacement(
+          careerGoal: 'Data analyst',
+        );
+        expect(
+          (await api.analyzePlacementDocument(
+            'document-1',
+          ))['technical_skills'],
+          ['Python'],
+        );
+        await api.deletePlacementDocument('document-1');
+        expect(
+          (await api.analyzePlacementJobDescription(
+            'Python required',
+          ))['explicit_requirements'],
+          ['Python required'],
+        );
+
+        expect(research['available'], isFalse);
+        expect(jsonDecode((requests.first as http.Request).body), {
+          'mood': 'good',
+        });
+        expect(requests.map((request) => request.url.path), [
+          '/assistant/mood/check-ins',
+          '/assistant/mood/check-ins',
+          '/assistant/mood/analytics',
+          '/assistant/study/documents',
+          '/assistant/placement/documents',
+          '/assistant/study/documents/document-1',
+          '/assistant/study/documents/document-1/quiz',
+          '/assistant/placement/research',
+          '/assistant/placement/documents/document-1/analysis',
+          '/assistant/placement/documents/document-1',
+          '/assistant/placement/job-description/analysis',
+        ]);
+        expect(
+          requests.every(
+            (request) =>
+                request.headers['Authorization'] == 'Bearer $_fakeToken',
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      'assistant document upload sends a multipart file with auth',
+      () async {
+        final requests = <http.BaseRequest>[];
+        final api = ApiService(
+          tokenStorage: FakeTokenStorage(_fakeToken),
+          client: MockClient((request) async {
+            requests.add(request);
+            return _json({
+              'id': 'document-1',
+              'filename': 'study_material.txt',
+            });
+          }),
+        );
+        final fixture = File('test\\fixtures\\study_material.txt')
+            .absolute
+            .path;
+
+        await api.uploadStudyDocument(fixture);
+        await api.uploadPlacementDocument(fixture);
+
+        expect(requests, hasLength(2));
+        for (final request in requests) {
+          expect(request, isA<http.Request>());
+          expect(request.headers['Authorization'], 'Bearer $_fakeToken');
+          expect(
+            request.headers['Content-Type'],
+            startsWith('multipart/form-data; boundary='),
+          );
+          final body = (request as http.Request).body;
+          expect(body, contains('name="file"; filename="study_material.txt"'));
+          expect(body, contains('Study Buddy upload test fixture'));
+        }
+        expect(requests.map((request) => request.url.path), [
+          '/assistant/study/documents',
+          '/assistant/placement/documents',
+        ]);
+      },
+    );
+
+    test(
+      'assistant upload API rejects unsupported extensions before sending',
+      () async {
+        var requestsSent = 0;
+        final api = ApiService(
+          tokenStorage: FakeTokenStorage(_fakeToken),
+          client: MockClient((request) async {
+            requestsSent++;
+            return _json({'id': 'unexpected'});
+          }),
+        );
+
+        await expectLater(
+          api.uploadStudyDocument('untrusted.exe'),
+          throwsA(
+            isA<ApiException>().having(
+              (error) => error.message,
+              'message',
+              'Choose a PDF, DOCX, or TXT file.',
+            ),
+          ),
+        );
+        expect(requestsSent, 0);
+      },
+    );
+
+    Future<Widget> wrap(
+      Widget screen, {
+      String userRole = 'student',
+      List<Map<String, dynamic>>? conversationsSeed,
+      List<Map<String, dynamic>>? studyDocumentsSeed,
+      void Function(http.Request request)? onAssistantChat,
+      Map<String, dynamic> Function(http.Request request)? onPlacementResearch,
+    }) async {
       final storage = FakeTokenStorage(_fakeToken);
-      final api = ApiService(tokenStorage: storage, client: _fakeBackend());
+      final api = ApiService(
+        tokenStorage: storage,
+        client: _fakeBackend(
+          userRole: userRole,
+          conversationsSeed: conversationsSeed,
+          studyDocumentsSeed: studyDocumentsSeed,
+          onAssistantChat: onAssistantChat,
+          onPlacementResearch: onPlacementResearch,
+        ),
+      );
+      final auth = AuthController(api: api, tokenStorage: storage);
+      await auth.restoreSession();
       return AppScope(
         api: api,
-        auth: AuthController(api: api, tokenStorage: storage),
+        auth: auth,
         child: MaterialApp(home: screen),
       );
     }
@@ -1547,10 +1992,13 @@ void main() {
     testWidgets(
       'AI Assistant screen displays greeting, suggested questions and answers',
       (tester) async {
-        await tester.pumpWidget(wrap(const CampusAssistantScreen()));
+        await tester.pumpWidget(await wrap(const CampusAssistantScreen()));
         await tester.pumpAndSettle();
 
         expect(find.text('AI Campus Assistant'), findsOneWidget);
+        expect(find.text('General Campus Assistant'), findsOneWidget);
+        expect(find.text('Placement Assistant'), findsOneWidget);
+        expect(find.text('Study Buddy'), findsOneWidget);
         expect(find.text('What is my attendance percentage?'), findsOneWidget);
         expect(
           find.text('Which subjects have low attendance?'),
@@ -1567,10 +2015,102 @@ void main() {
       },
     );
 
+    testWidgets(
+      'assistant mode changes isolate conversations and legacy chats default to general',
+      (tester) async {
+        final chatBodies = <Map<String, dynamic>>[];
+        final screen = const CampusAssistantScreen();
+        await tester.pumpWidget(
+          await wrap(
+            screen,
+            conversationsSeed: [
+              {
+                'id': 'legacy-general',
+                'title': 'Legacy general',
+                'messages': [
+                  {'role': 'assistant', 'content': 'Legacy general reply'},
+                ],
+              },
+              {
+                'id': 'placement-chat',
+                'mode': 'placement',
+                'title': 'Placement history',
+                'messages': [
+                  {'role': 'assistant', 'content': 'Placement only reply'},
+                ],
+              },
+              {
+                'id': 'study-chat',
+                'mode': 'study',
+                'title': 'Study history',
+                'messages': [
+                  {'role': 'assistant', 'content': 'Study only reply'},
+                ],
+              },
+            ],
+            onAssistantChat: (request) {
+              chatBodies.add(jsonDecode(request.body) as Map<String, dynamic>);
+            },
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byTooltip('Saved Conversations'));
+        await tester.pumpAndSettle();
+        expect(find.text('Legacy general'), findsOneWidget);
+        expect(find.text('Placement history'), findsNothing);
+        expect(find.text('Study history'), findsNothing);
+        await tester.tap(find.text('Legacy general'));
+        await tester.pumpAndSettle();
+        expect(find.text('Legacy general reply'), findsOneWidget);
+
+        await tester.tap(find.text('Placement Assistant'));
+        await tester.pumpAndSettle();
+        expect(find.text('Legacy general reply'), findsNothing);
+        await tester.tap(find.byTooltip('Saved Conversations'));
+        await tester.pumpAndSettle();
+        expect(find.text('Legacy general'), findsNothing);
+        expect(find.text('Placement history'), findsOneWidget);
+        expect(find.text('Study history'), findsNothing);
+        await tester.tap(find.text('Placement history'));
+        await tester.pumpAndSettle();
+        expect(find.text('Placement only reply'), findsOneWidget);
+
+        await tester.tap(find.text('Study Buddy'));
+        await tester.pumpAndSettle();
+        expect(find.text('Placement only reply'), findsNothing);
+        await tester.tap(find.byTooltip('Saved Conversations'));
+        await tester.pumpAndSettle();
+        expect(find.text('Legacy general'), findsNothing);
+        expect(find.text('Placement history'), findsNothing);
+        expect(find.text('Study history'), findsOneWidget);
+        await tester.tap(find.text('Study history'));
+        await tester.pumpAndSettle();
+        expect(find.text('Study only reply'), findsOneWidget);
+
+        await tester.enterText(
+          find.byType(TextField).first,
+          'Review this topic',
+        );
+        await tester.tap(find.byTooltip('Send'));
+        await tester.pump();
+        await tester.pumpAndSettle();
+        expect(chatBodies, hasLength(1));
+        expect(chatBodies.single['mode'], 'study');
+        expect(chatBodies.single['conversation_id'], 'study-chat');
+        expect(
+          (chatBodies.single['history'] as List).any(
+            (turn) => turn['content'] == 'Placement only reply',
+          ),
+          isFalse,
+        );
+      },
+    );
+
     testWidgets('AI Assistant asks for free time and displays free window', (
       tester,
     ) async {
-      await tester.pumpWidget(wrap(const CampusAssistantScreen()));
+      await tester.pumpWidget(await wrap(const CampusAssistantScreen()));
       await tester.pumpAndSettle();
 
       await tester.enterText(find.byType(TextField), 'When am I free today?');
@@ -1584,9 +2124,276 @@ void main() {
     });
 
     testWidgets(
+      'assistant mode selection is student-only and mood is separate',
+      (tester) async {
+        await tester.pumpWidget(
+          await wrap(
+            const CampusAssistantScreen(),
+            studyDocumentsSeed: [
+              {
+                'id': 'study-document-1',
+                'filename': 'study_material.txt',
+                'summary': 'A private study document summary.',
+                'word_count': 9,
+              },
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Study Buddy'));
+        await tester.pumpAndSettle();
+        expect(find.text('Add PDF, DOCX or TXT'), findsOneWidget);
+        await tester.ensureVisible(find.text('Add PDF, DOCX or TXT'));
+        await tester.ensureVisible(find.text('study_material.txt'));
+        expect(find.text('A private study document summary.'), findsOneWidget);
+        await tester.tap(
+          find.byTooltip('Generate quiz for study_material.txt'),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Complete the statement: ____'), findsOneWidget);
+        await tester.tap(find.text('Close'));
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.byTooltip('Delete study_material.txt'));
+        await tester.tap(find.byTooltip('Delete study_material.txt'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Delete'));
+        await tester.pumpAndSettle();
+        expect(find.text('No study documents yet.'), findsOneWidget);
+
+        await tester.tap(find.byTooltip('More assistant options'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Mood and wellbeing (private)'));
+        await tester.pumpAndSettle();
+        expect(find.text('Mood and wellbeing'), findsOneWidget);
+        expect(find.textContaining('non-diagnostic'), findsOneWidget);
+        await tester.scrollUntilVisible(
+          find.textContaining('No mood check-ins yet.'),
+          300,
+          scrollable: find.byType(Scrollable).last,
+        );
+        expect(find.textContaining('No mood check-ins yet.'), findsOneWidget);
+        await tester.tap(find.byType(DropdownButtonFormField<String>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Low').last);
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('mood_private_reflection')),
+          'I will take a short break and ask a friend for support.',
+        );
+        await tester.tap(find.text('Save private check-in'));
+        await tester.pumpAndSettle();
+        expect(find.text('Low'), findsNWidgets(2));
+        expect(
+          find.textContaining('I will take a short break'),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining('This check-in is not a diagnosis.'),
+          findsOneWidget,
+        );
+
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.text('Placement Assistant'));
+        await tester.tap(find.text('Placement Assistant'));
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.text('Upload job description or CV'));
+        expect(find.text('Upload job description or CV'), findsOneWidget);
+
+        await tester.pumpWidget(
+          await wrap(const CampusAssistantScreen(), userRole: 'faculty'),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Placement Assistant'), findsNothing);
+        expect(find.text('Study Buddy'), findsNothing);
+        await tester.tap(find.byTooltip('More assistant options'));
+        await tester.pumpAndSettle();
+        expect(find.text('Placement Practice'), findsNothing);
+        await tester.tap(find.text('Mood and wellbeing (private)'));
+        await tester.pumpAndSettle();
+        expect(find.text('Aggregate wellbeing analytics'), findsOneWidget);
+        expect(
+          find.text('No aggregate analytics are available yet.'),
+          findsOneWidget,
+        );
+        expect(find.text('Your private check-in history'), findsNothing);
+      },
+    );
+
+    testWidgets('assistant upload rejects unsupported and oversized files', (
+      tester,
+    ) async {
+      final fixture = File('test\\fixtures\\study_material.txt').absolute;
+      Future<Widget> screenFor(AssistantPickedDocument selected, String key) =>
+          wrap(
+            CampusAssistantScreen(
+              key: Key(key),
+              filePicker: () async => selected,
+            ),
+          );
+
+      await tester.pumpWidget(
+        await screenFor(
+          AssistantPickedDocument(
+            name: 'unsupported.exe',
+            size: fixture.lengthSync(),
+            path: fixture.path,
+          ),
+          'unsupported',
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Study Buddy'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Add PDF, DOCX or TXT'));
+      await tester.tap(find.text('Add PDF, DOCX or TXT'));
+      await tester.pumpAndSettle();
+      expect(find.text('Choose a PDF, DOCX, or TXT file.'), findsOneWidget);
+
+      await tester.pumpWidget(
+        await screenFor(
+          AssistantPickedDocument(
+            name: 'too-large.pdf',
+            size: 5 * 1024 * 1024 + 1,
+            path: fixture.path,
+          ),
+          'too-large',
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Study Buddy'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Add PDF, DOCX or TXT'));
+      await tester.tap(find.text('Add PDF, DOCX or TXT'));
+      await tester.pumpAndSettle();
+      expect(find.text('Documents must be 5 MB or smaller.'), findsOneWidget);
+    });
+
+    testWidgets(
+      'placement research requires consent and only displays web citations',
+      (tester) async {
+        final sentBodies = <Map<String, dynamic>>[];
+        var researchCount = 0;
+        await tester.pumpWidget(
+          await wrap(
+            const CampusAssistantScreen(),
+            onPlacementResearch: (request) {
+              sentBodies.add(jsonDecode(request.body) as Map<String, dynamic>);
+              researchCount++;
+              if (researchCount == 1) {
+                return {
+                  'available': false,
+                  'summary': null,
+                  'sources': <Map<String, dynamic>>[],
+                  'reason': 'The configured search provider is unavailable.',
+                };
+              }
+              return {
+                'available': true,
+                'summary': 'Returned placement research summary.',
+                'sources': [
+                  {
+                    'title': 'Campus career guide',
+                    'url': 'https://careers.example.edu/roles',
+                  },
+                  {
+                    'title': 'HTTP career guide',
+                    'url': 'http://careers.example.edu/entry-level',
+                  },
+                  {'title': 'Unsafe citation', 'url': 'javascript:alert(1)'},
+                  {'title': 'Relative citation', 'url': '/careers'},
+                  {
+                    'title': 'Credential URL',
+                    'url': 'https://user@careers.example.edu/roles',
+                  },
+                ],
+              };
+            },
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.text('Placement Assistant'));
+        await tester.tap(find.text('Placement Assistant'));
+        await tester.pumpAndSettle();
+
+        await tester.ensureVisible(
+          find.byKey(const Key('placement_career_goal')),
+        );
+        await tester.enterText(
+          find.byKey(const Key('placement_career_goal')),
+          'Data analyst',
+        );
+        await tester.ensureVisible(
+          find.byKey(const Key('placement_job_description')),
+        );
+        await tester.enterText(
+          find.byKey(const Key('placement_job_description')),
+          'SQL and Python experience',
+        );
+        final consentFinder = find.byKey(
+          const Key('placement_external_processing_consent'),
+        );
+        await tester.ensureVisible(consentFinder);
+        expect(tester.widget<CheckboxListTile>(consentFinder).value, isFalse);
+        await tester.ensureVisible(find.text('Check placement research'));
+        await tester.tap(find.text('Check placement research'));
+        await tester.pumpAndSettle();
+        expect(find.text('Placement research unavailable'), findsOneWidget);
+        expect(
+          find.text('The configured search provider is unavailable.'),
+          findsOneWidget,
+        );
+
+        await tester.ensureVisible(consentFinder);
+        await tester.tap(consentFinder);
+        await tester.pumpAndSettle();
+        expect(tester.widget<CheckboxListTile>(consentFinder).value, isTrue);
+        await tester.ensureVisible(find.text('Check placement research'));
+        await tester.tap(find.text('Check placement research'));
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Returned placement research summary.'),
+          findsOneWidget,
+        );
+        await tester.ensureVisible(find.text('Campus career guide'));
+        expect(find.text('Campus career guide'), findsOneWidget);
+        expect(find.text('https://careers.example.edu/roles'), findsOneWidget);
+        expect(
+          find.text('http://careers.example.edu/entry-level'),
+          findsOneWidget,
+        );
+        expect(find.text('Unsafe citation'), findsNothing);
+        expect(find.text('Relative citation'), findsNothing);
+        expect(find.text('Credential URL'), findsNothing);
+
+        expect(sentBodies, [
+          {
+            'career_goal': 'Data analyst',
+            'job_description': 'SQL and Python experience',
+            'allow_external_processing': false,
+          },
+          {
+            'career_goal': 'Data analyst',
+            'job_description': 'SQL and Python experience',
+            'allow_external_processing': true,
+          },
+        ]);
+
+        await tester.ensureVisible(find.text('General Campus Assistant'));
+        await tester.tap(find.text('General Campus Assistant'));
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.text('Placement Assistant'));
+        await tester.tap(find.text('Placement Assistant'));
+        await tester.pumpAndSettle();
+        expect(tester.widget<CheckboxListTile>(consentFinder).value, isFalse);
+      },
+    );
+
+    testWidgets(
       'Notifications screen displays weekly low attendance warnings',
       (tester) async {
-        await tester.pumpWidget(wrap(const NotificationsScreen()));
+        await tester.pumpWidget(await wrap(const NotificationsScreen()));
         await tester.pumpAndSettle();
 
         expect(find.text('Attendance Notices'), findsOneWidget);

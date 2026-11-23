@@ -24,6 +24,7 @@ function user(role, studentId) {
 
 function matches(document, query) {
   return Object.entries(query).every(([key, expected]) => {
+    if (key === '$or') return expected.some((condition) => matches(document, condition));
     const value = document[key];
     if (expected instanceof ObjectId) return value instanceof ObjectId && value.equals(expected);
     if (expected && typeof expected === 'object' && Object.hasOwn(expected, '$ne')) {
@@ -165,6 +166,62 @@ test('unlinked notification requests return an empty response and mark-read is f
     notifications: [],
   });
   assert.equal(mark.status, 403);
+});
+
+test('lost and found actions are visible and markable for their recipient user without a linked student profile', async () => {
+  const student = user('student');
+  const claimId = new ObjectId();
+  const item = {
+    _id: new ObjectId(),
+    recipient_user_id: student._id,
+    action_type: 'lost_found_claim',
+    claim_id: claimId,
+    match_id: new ObjectId(),
+    lost_report_id: new ObjectId(),
+    found_report_id: new ObjectId(),
+    title: 'Lost and Found match request',
+    message: 'Review a potential match.',
+    created_at: new Date('2026-11-21T12:00:00Z'),
+    is_read: false,
+  };
+  const { app, notificationCollection } = setup({
+    users: [student],
+    notifications: [item],
+  });
+
+  const listed = await asUser(app, student, 'get', '/api/notifications');
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.linked, false);
+  assert.equal(listed.body.notifications.length, 1);
+  assert.equal(listed.body.notifications[0].action_type, 'lost_found_claim');
+  assert.equal(listed.body.notifications[0].claim_id, String(claimId));
+  assert.equal(listed.body.notifications[0].lost_report_id, String(item.lost_report_id));
+
+  const marked = await asUser(app, student, 'patch', `/api/notifications/${item._id}/read`);
+  assert.equal(marked.status, 200);
+  assert.equal(notificationCollection.documents[0].is_read, true);
+});
+
+test('legacy Lost and Found notifications retain a route to incoming requests', async () => {
+  const student = user('student');
+  const item = {
+    _id: new ObjectId(),
+    recipient_user_id: student._id,
+    warning_type: 'lost_found_match',
+    title: 'Lost and Found match request',
+    message: 'Review a potential match.',
+    created_at: new Date('2026-11-21T12:00:00Z'),
+    is_read: false,
+  };
+  const { app } = setup({
+    users: [student],
+    notifications: [item],
+  });
+
+  const listed = await asUser(app, student, 'get', '/api/notifications');
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.notifications[0].action_type, 'lost_found_claim');
+  assert.equal(listed.body.notifications[0].claim_id, '');
 });
 
 test('mark-read only updates a notification belonging to the signed-in student', async () => {

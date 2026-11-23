@@ -97,7 +97,7 @@ function createAuthRouter({
 
       const config = getJwtConfig(env);
       const accessToken = jwt.sign(
-        {},
+        { role: user.role || 'student' },
         config.secret,
         {
           algorithm: config.algorithm,

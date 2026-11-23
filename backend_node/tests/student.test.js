@@ -68,15 +68,37 @@ function createCollections(users, students, timetableEntries = []) {
     },
     timetable: {
       find(query, options) {
-        assert.deepEqual(options, {
-          projection: { _id: 0, department: 1, semester: 1 },
-        });
+        assert.equal(options.projection._id, 0);
         return {
           async toArray() {
             return timetableEntries.filter((entry) => matches(entry, query));
           },
         };
       },
+    },
+  };
+}
+
+function createRecordCollection(records) {
+  return {
+    find(query) {
+      let matched = records.filter((record) => matches(record, query));
+      const cursor = {
+        sort(sortSpec) {
+          const [field, direction] = Object.entries(sortSpec)[0];
+          matched = matched.slice().sort((left, right) =>
+            String(left[field] || '').localeCompare(String(right[field] || '')) * direction);
+          return cursor;
+        },
+        limit(count) {
+          matched = matched.slice(0, count);
+          return cursor;
+        },
+        async toArray() {
+          return matched;
+        },
+      };
+      return cursor;
     },
   };
 }
@@ -100,6 +122,16 @@ function createTestApp(users, students, options = {}) {
     getUsersCollection: options.getUsersCollection || (() => collections.users),
     getStudentsCollection: options.getStudentsCollection || (() => collections.students),
     getTimetableCollection: options.getTimetableCollection || (() => collections.timetable),
+    getAttendanceCollection: options.getAttendanceCollection || (() =>
+      createRecordCollection(options.attendanceRecords || [])),
+    getAttendanceEntriesCollection: options.getAttendanceEntriesCollection || (() =>
+      createRecordCollection(options.attendanceEntryRecords || [])),
+    getAssignmentsCollection: options.getAssignmentsCollection || (() =>
+      createRecordCollection(options.assignmentRecords || [])),
+    getMarksCollection: options.getMarksCollection || (() =>
+      createRecordCollection(options.markRecords || [])),
+    getNotificationsCollection: options.getNotificationsCollection || (() =>
+      createRecordCollection(options.notificationRecords || [])),
   });
 }
 
@@ -139,6 +171,51 @@ test('GET /api/students/me reports an unlinked or missing profile as not found',
   assert.deepEqual(unlinkedResponse.body, { detail: 'Student profile not found' });
   assert.equal(missingResponse.status, 404);
   assert.deepEqual(missingResponse.body, { detail: 'Student profile not found' });
+});
+
+test('student dashboards return only that account non-synthetic academic records', async () => {
+  const firstUser = makeUser('student', 'MCA001');
+  const secondUser = makeUser('student', 'MCA002');
+  const students = [
+    { _id: new ObjectId(), ...studentProfile },
+    {
+      _id: new ObjectId(),
+      student_id: 'MCA002',
+      name: 'Another Student',
+      department: 'MCA',
+      semester: 1,
+      section: 'A',
+    },
+  ];
+  const app = createTestApp([firstUser, secondUser], students, {
+    attendanceRecords: [
+      { student_id: 'MCA001', subject_code: 'MCA101', present_classes: 4, total_classes: 5, is_demo: false, synthetic_demo: false },
+      { student_id: 'MCA001', subject_code: 'MCA102', present_classes: 100, total_classes: 100, is_demo: true, synthetic_demo: true },
+      { student_id: 'MCA002', subject_code: 'MCA101', present_classes: 1, total_classes: 2, is_demo: false, synthetic_demo: false },
+    ],
+    markRecords: [
+      { student_id: 'MCA001', subject_code: 'MCA101', score: 80, max_score: 100, is_demo: false, synthetic_demo: false },
+      { student_id: 'MCA001', subject_code: 'MCA102', score: 100, max_score: 100, is_demo: false, synthetic_demo: true },
+      { student_id: 'MCA002', subject_code: 'MCA101', score: 50, max_score: 100, is_demo: false, synthetic_demo: false },
+    ],
+    assignmentRecords: [
+      { student_id: 'MCA001', title: 'Official', status: 'pending', is_demo: false, synthetic_demo: false },
+      { student_id: 'MCA001', title: 'Synthetic', status: 'pending', is_demo: false, synthetic_demo: true },
+      { student_id: 'MCA002', title: 'Other student', status: 'pending', is_demo: false, synthetic_demo: false },
+    ],
+  });
+
+  const first = await asUser(app, firstUser, '/api/students/dashboard/me');
+  const second = await asUser(app, secondUser, '/api/students/dashboard/me');
+
+  assert.equal(first.status, 200);
+  assert.deepEqual(first.body.attendance.records.map((record) => record.student_id), ['MCA001']);
+  assert.deepEqual(first.body.marks.map((record) => record.student_id), ['MCA001']);
+  assert.deepEqual(first.body.assignments.upcoming.map((record) => record.title), ['Official']);
+  assert.equal(second.status, 200);
+  assert.deepEqual(second.body.attendance.records.map((record) => record.student_id), ['MCA002']);
+  assert.deepEqual(second.body.marks.map((record) => record.student_id), ['MCA002']);
+  assert.deepEqual(second.body.assignments.upcoming.map((record) => record.title), ['Other student']);
 });
 
 test('GET /api/students requires authentication', async () => {

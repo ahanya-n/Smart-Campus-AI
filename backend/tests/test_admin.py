@@ -1,4 +1,4 @@
-from tests.conftest import PASSWORD
+PASSWORD = "Test-pass-123"
 
 
 def test_admin_list_users(client, admin, accounts):

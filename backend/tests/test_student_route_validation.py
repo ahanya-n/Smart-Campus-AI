@@ -241,6 +241,43 @@ def test_authorized_student_directory_returns_all_900_records(monkeypatch):
         ({"role": "student"}, []),
     ],
 )
+class FakeCursor:
+    def __init__(self, records):
+        self.records = list(records)
+
+    def sort(self, key, direction=1):
+        self.records.sort(key=lambda record: record.get(key, ""), reverse=direction < 0)
+        return self
+
+    def limit(self, count):
+        self.records = self.records[:count]
+        return self
+
+    def __iter__(self):
+        return iter(self.records)
+
+
+class FakeAcademicCollection:
+    def __init__(self, records):
+        self.records = records
+        self.queries = []
+
+    def find(self, query, _projection=None):
+        self.queries.append(query)
+        return FakeCursor([
+            record for record in self.records
+            if matches_filter(record, query)
+        ])
+
+
+class FakeDatabase:
+    def __init__(self, book_loans):
+        self.collections = {"book_loans": book_loans}
+
+    def __getitem__(self, name):
+        return self.collections[name]
+
+
 def test_student_directory_scopes_students_and_preserves_staff_access(
     monkeypatch,
     user,
@@ -273,6 +310,91 @@ def test_student_directory_scopes_students_and_preserves_staff_access(
 
     assert response.status_code == 200
     assert [row["student_id"] for row in response.json()] == expected_ids
+
+
+def test_student_dashboard_scopes_records_and_excludes_synthetic_data(monkeypatch):
+    profiles = {
+        "MCA901": {
+            "student_id": "MCA901",
+            "name": "Student One",
+            "department": "MCA",
+            "semester": 1,
+            "section": "A",
+        },
+        "MCA902": {
+            "student_id": "MCA902",
+            "name": "Student Two",
+            "department": "MCA",
+            "semester": 1,
+            "section": "A",
+        },
+    }
+
+    def records(field, values):
+        return [
+            {"student_id": student_id, field: value, "is_demo": is_demo, "synthetic_demo": is_synthetic}
+            for student_id, value, is_demo, is_synthetic in values
+        ]
+
+    attendance = FakeAcademicCollection(records("present_classes", [
+        ("MCA901", 4, False, False),
+        ("MCA901", 100, True, True),
+        ("MCA902", 1, False, False),
+    ]))
+    for row in attendance.records:
+        row["total_classes"] = 5 if row["student_id"] == "MCA901" else 2
+        row["subject_code"] = "MCA101"
+        row["subject_name"] = "Foundations"
+    marks = FakeAcademicCollection(records("score", [
+        ("MCA901", 80, False, False),
+        ("MCA901", 100, False, True),
+        ("MCA902", 50, False, False),
+    ]))
+    for row in marks.records:
+        row.update({"max_score": 100, "subject_code": "MCA101"})
+    assignments = FakeAcademicCollection(records("title", [
+        ("MCA901", "Official assignment", False, False),
+        ("MCA901", "Synthetic assignment", False, True),
+        ("MCA902", "Other student's assignment", False, False),
+    ]))
+    entries = FakeAcademicCollection([])
+    notifications = FakeAcademicCollection([])
+    timetable = FakeAcademicCollection([])
+    loans = FakeAcademicCollection([])
+
+    monkeypatch.setattr(
+        student_routes,
+        "find_linked_student",
+        lambda user: profiles[user["student_id"]],
+    )
+    monkeypatch.setattr(student_routes, "attendance_collection", attendance)
+    monkeypatch.setattr(student_routes, "attendance_entries_collection", entries)
+    monkeypatch.setattr(student_routes, "marks_collection", marks)
+    monkeypatch.setattr(student_routes, "assignments_collection", assignments)
+    monkeypatch.setattr(student_routes, "notifications_collection", notifications)
+    monkeypatch.setattr(student_routes, "timetable_collection", timetable)
+    monkeypatch.setattr(student_routes, "database", FakeDatabase(loans))
+
+    first = student_routes.get_student_dashboard(
+        user={"_id": "user-1", "role": "student", "student_id": "MCA901"}
+    )
+    second = student_routes.get_student_dashboard(
+        user={"_id": "user-2", "role": "student", "student_id": "MCA902"}
+    )
+
+    assert first["attendance"]["present_classes"] == 4
+    assert [mark["student_id"] for mark in first["marks"]] == ["MCA901"]
+    assert [item["title"] for item in first["assignments"]["upcoming"]] == [
+        "Official assignment",
+    ]
+    assert second["attendance"]["present_classes"] == 1
+    assert [mark["student_id"] for mark in second["marks"]] == ["MCA902"]
+    assert all(
+        query["is_demo"] == {"$ne": True}
+        and query["synthetic_demo"] == {"$ne": True}
+        for collection in (attendance, entries, marks, assignments, notifications, timetable)
+        for query in collection.queries
+    )
 
 
 def test_faculty_directory_is_limited_to_assigned_class_groups(monkeypatch):

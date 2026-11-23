@@ -1,0 +1,1 @@
+Study Buddy upload test fixture for a small UTF-8 document.

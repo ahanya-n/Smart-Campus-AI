@@ -13,11 +13,13 @@ from routes.attendance_routes import router as attendance_router
 from routes.timetable_routes import router as timetable_router
 from routes.admin_routes import router as admin_router
 from routes.assistant_routes import router as assistant_router
+from routes.assistant_private_routes import router as assistant_private_router
 from routes.notification_routes import router as notification_router
 from routes.library_routes import router as library_router
 from routes.transport_routes import router as transport_router
 from routes.complaint_routes import router as complaint_router
 from routes.academic_intelligence_routes import router as academic_intelligence_router
+from routes.lost_found_routes import router as lost_found_router
 from services.attendance_warning_service import check_weekly_low_attendance
 
 logger = logging.getLogger("smart_campus")
@@ -100,6 +102,7 @@ app.include_router(admin_router)
 
 # AI Campus Assistant & Free-Time APIs
 app.include_router(assistant_router)
+app.include_router(assistant_private_router)
 
 # Weekly Attendance Warnings & Notification APIs
 app.include_router(notification_router)
@@ -113,6 +116,7 @@ app.include_router(transport_router)
 # Student complaints and admin case management
 app.include_router(complaint_router)
 app.include_router(academic_intelligence_router)
+app.include_router(lost_found_router)
 
 
 @app.get("/")

@@ -262,6 +262,22 @@ def test_student_report_excludes_demo_and_synthetic_records(monkeypatch):
         assert collection.query["synthetic_demo"] == {"$ne": True}
 
 
+def test_my_academic_report_does_not_label_synthetic_profile_as_official(monkeypatch):
+    monkeypatch.setattr(
+        academic_intelligence_routes,
+        "find_linked_student",
+        lambda _user: {"student_id": "STUDENT-SYNTHETIC", "synthetic_demo": True},
+    )
+
+    report = academic_intelligence_routes.my_academic_report(
+        user={"role": "student"},
+    )
+
+    assert report["linked"] is False
+    assert "synthetic/demo" in report["message"]
+    assert "synthetic/demo" in report["risk_reasons"][0]
+
+
 def test_invalid_attendance_counts_and_invalid_session_dates_are_excluded():
     report = analyze_student(
         _student(),

@@ -9,7 +9,9 @@
     "test": "node --test",
     "provision:admin": "node scripts/provision-admin.js",
     "setup:dev-admin": "node scripts/setup-dev-admin.js",
-    "seed:local-demo": "node scripts/seed-local-demo-accounts.js"
+    "seed:local-demo": "node scripts/seed-local-demo-accounts.js",
+    "seed:login-demo": "node scripts/seed-login-demo-accounts.js",
+    "seed:realistic-demo": "node scripts/seed-realistic-demo-students.js"
   },
   "keywords": [],
   "author": "",

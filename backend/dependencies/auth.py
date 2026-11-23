@@ -1,16 +1,13 @@
 import os
-from pathlib import Path
 
 import jwt
 from bson import ObjectId
 from bson.errors import InvalidId
-from dotenv import load_dotenv
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from auth_config import get_jwt_config
 from database import users_collection
-
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 JWT_SECRET = os.getenv("JWT_SECRET")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
@@ -34,17 +31,13 @@ def get_current_user(
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise unauthorized("Not authenticated")
 
-    if not JWT_SECRET or JWT_SECRET == "change-me":
-        raise HTTPException(
-            status_code=500,
-            detail="JWT_SECRET is not configured"
-        )
+    config = get_jwt_config()
 
     try:
         payload = jwt.decode(
             credentials.credentials,
-            JWT_SECRET,
-            algorithms=[JWT_ALGORITHM],
+            config["secret"],
+            algorithms=[config["algorithm"]],
             options={"require": ["exp", "sub"]}
         )
     except jwt.ExpiredSignatureError:

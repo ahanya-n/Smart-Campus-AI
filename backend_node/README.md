@@ -15,11 +15,36 @@ npm run dev
 ```
 
 Set a private `JWT_SECRET` in the untracked local `.env`; do not commit it.
+Generate a high-entropy value locally (for example,
+`node -p "require('node:crypto').randomBytes(64).toString('hex')"`). Use the
+same value in `backend/.env` when running FastAPI, because both services issue
+and validate HS256 bearer tokens. The Express server locates
+`backend_node/.env` relative to its source file, so startup does not depend on
+the shell's current directory.
 The example config points to `mongodb://127.0.0.1:27017` and the isolated
 `smart_campus_test` database. Keep the URI and database isolated when testing.
 The existing `smart_campus` database is refused unless
 `MONGO_ALLOW_PRODUCTION=true` is explicitly supplied. Do not set that flag for
 development or tests.
+
+## Seed development login accounts
+
+Run this only against the local MongoDB instance. The script is pinned to
+`127.0.0.1:27017/smart_campus_test`, checks all three email conflicts before
+writing, and creates the linked synthetic student profile. It does not update
+existing passwords or print passwords.
+
+From `backend_node`, run:
+
+```powershell
+npm run seed:login-demo
+```
+
+The script prompts for the administrator, faculty, and student passwords with
+hidden terminal input. For automation, set `DEMO_ADMIN_PASSWORD`,
+`DEMO_FACULTY_PASSWORD`, and `DEMO_STUDENT_PASSWORD` only in the current
+process environment. Do not put these credentials in source files or command
+history.
 
 MongoDB is connected lazily on the first database-backed request. Importing
 the app or requesting `GET /api/health` does not connect to MongoDB. No

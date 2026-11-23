@@ -1,7 +1,30 @@
 import re
 
+import jwt
+import pytest
+from fastapi import HTTPException
+
+from auth_config import get_jwt_config
 from services.user_service import password_hash, verify_password
-from tests.conftest import PASSWORD
+
+PASSWORD = "Test-pass-123"
+
+
+def test_jwt_configuration_fails_closed_on_missing_or_invalid_values():
+    with pytest.raises(HTTPException) as missing:
+        get_jwt_config({"JWT_SECRET": "", "JWT_ALGORITHM": "HS256", "TOKEN_EXPIRE_MINUTES": "60"})
+    assert missing.value.status_code == 500
+    assert missing.value.detail == "JWT_SECRET is not configured"
+
+    with pytest.raises(HTTPException) as algorithm:
+        get_jwt_config({"JWT_SECRET": "test-only", "JWT_ALGORITHM": "none", "TOKEN_EXPIRE_MINUTES": "60"})
+    assert algorithm.value.status_code == 500
+    assert algorithm.value.detail == "JWT_ALGORITHM must be HS256"
+
+    with pytest.raises(HTTPException) as expiry:
+        get_jwt_config({"JWT_SECRET": "test-only", "JWT_ALGORITHM": "HS256", "TOKEN_EXPIRE_MINUTES": "0"})
+    assert expiry.value.status_code == 500
+    assert expiry.value.detail == "TOKEN_EXPIRE_MINUTES must be a positive integer"
 
 
 def test_password_verification_accepts_express_argon2_parameter_order():
@@ -28,6 +51,16 @@ def test_successful_login(client, accounts):
     assert "access_token" in body
     assert body["token_type"].lower() == "bearer"
     assert len(body["access_token"]) > 20
+    config = get_jwt_config()
+    payload = jwt.decode(
+        body["access_token"],
+        config["secret"],
+        algorithms=[config["algorithm"]],
+    )
+    assert payload["sub"] == user["id"]
+    assert payload["role"] == "student"
+    assert isinstance(payload["iat"], (int, float))
+    assert isinstance(payload["exp"], (int, float))
 
 
 def test_wrong_password_returns_401(client, accounts):

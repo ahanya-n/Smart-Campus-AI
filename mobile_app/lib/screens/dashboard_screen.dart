@@ -16,7 +16,7 @@ import 'notifications_screen.dart';
 import 'timetable_screen.dart';
 import 'transport_screen.dart';
 
-class DashboardScreen extends StatelessWidget {
+class DashboardScreen extends StatefulWidget {
   const DashboardScreen({
     super.key,
     required this.onOpenStudents,
@@ -26,9 +26,43 @@ class DashboardScreen extends StatelessWidget {
   final VoidCallback onOpenStudents;
   final VoidCallback onOpenProfile;
 
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  Map<String, dynamic>? _dashboard;
+  String? _dashboardError;
+  bool _dashboardLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadDashboard());
+  }
+
+  Future<void> _loadDashboard() async {
+    final auth = AppScope.read(context).auth;
+    if (auth.user?.isStudent != true) return;
+    setState(() {
+      _dashboardLoading = true;
+      _dashboardError = null;
+    });
+    try {
+      final dashboard =
+          await AppScope.read(context).api.getStudentDashboard();
+      if (mounted) setState(() => _dashboard = dashboard);
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _dashboardError = error.message);
+    } finally {
+      if (mounted) setState(() => _dashboardLoading = false);
+    }
+  }
+
   Future<void> _refresh(BuildContext context) async {
     try {
       await AppScope.read(context).auth.refreshUser();
+      await _loadDashboard();
     } on ApiException catch (e) {
       if (context.mounted && !e.isUnauthorized) {
         ScaffoldMessenger.of(context)
@@ -59,7 +93,7 @@ class DashboardScreen extends StatelessWidget {
           ),
           IconButton(
             tooltip: 'Profile',
-            onPressed: onOpenProfile,
+            onPressed: widget.onOpenProfile,
             icon: const Icon(Icons.account_circle_outlined),
           ),
         ],
@@ -76,6 +110,13 @@ class DashboardScreen extends StatelessWidget {
                 if (user != null) ...[
                   _WelcomeCard(user: user),
                   const SizedBox(height: 16),
+                  if (user.isStudent)
+                    _StudentDashboardOverview(
+                      dashboard: _dashboard,
+                      loading: _dashboardLoading,
+                      error: _dashboardError,
+                    ),
+                  if (user.isStudent) const SizedBox(height: 16),
                   _AssistantHeroCard(
                     onTap: () => _open(context, const CampusAssistantScreen()),
                   ),
@@ -188,7 +229,7 @@ class DashboardScreen extends StatelessWidget {
                       title: 'Student Directory',
                       subtitle: 'Browse all students',
                       live: true,
-                      onTap: onOpenStudents,
+                      onTap: widget.onOpenStudents,
                     ),
                     _FeatureTile(
                       icon: Icons.fact_check_rounded,
@@ -209,7 +250,7 @@ class DashboardScreen extends StatelessWidget {
                       title: 'My Profile',
                       subtitle: 'Account details',
                       live: true,
-                      onTap: onOpenProfile,
+                      onTap: widget.onOpenProfile,
                     ),
                   ],
                 ),
@@ -257,6 +298,250 @@ class DashboardScreen extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _StudentDashboardOverview extends StatelessWidget {
+  const _StudentDashboardOverview({
+    required this.dashboard,
+    required this.loading,
+    required this.error,
+  });
+
+  final Map<String, dynamic>? dashboard;
+  final bool loading;
+  final String? error;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    if (loading && dashboard == null) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+    if (error != null && dashboard == null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(error!, style: TextStyle(color: scheme.error)),
+        ),
+      );
+    }
+
+    final profile = dashboard?['profile'] is Map
+        ? Map<String, dynamic>.from(dashboard!['profile'] as Map)
+        : <String, dynamic>{};
+    final attendance = dashboard?['attendance'] is Map
+        ? Map<String, dynamic>.from(dashboard!['attendance'] as Map)
+        : <String, dynamic>{};
+    final assignments = dashboard?['assignments'] is Map
+        ? Map<String, dynamic>.from(dashboard!['assignments'] as Map)
+        : <String, dynamic>{};
+    final timetable = dashboard?['timetable'] is Map
+        ? Map<String, dynamic>.from(dashboard!['timetable'] as Map)
+        : <String, dynamic>{};
+    final todayEntries = timetable['entries'] is List
+        ? (timetable['entries'] as List).whereType<Map>().toList()
+        : <Map<dynamic, dynamic>>[];
+    final upcoming = assignments['upcoming'] is List
+        ? (assignments['upcoming'] as List).whereType<Map>().take(4).toList()
+        : <Map<dynamic, dynamic>>[];
+    final marks = dashboard?['marks'] is List
+        ? (dashboard!['marks'] as List).whereType<Map>().toList()
+        : <Map<dynamic, dynamic>>[];
+    final cgpa = dashboard?['cgpa'];
+    final attendancePercentage = attendance['percentage'];
+    final studyStreak = dashboard?['study_streak'] ?? 0;
+
+    return Column(
+      children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            gradient: LinearGradient(
+              colors: [scheme.primary, Color.lerp(scheme.primary, Colors.black, 0.22)!],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'MAKE TODAY A STEP FORWARD',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: scheme.onPrimary.withValues(alpha: 0.75),
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                todayEntries.isEmpty
+                    ? 'A focused study day.'
+                    : '${todayEntries.length} classes and ${assignments['pending'] ?? 0} assignment(s) due.',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  color: scheme.onPrimary,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '${profile['roll_number'] ?? profile['student_id'] ?? 'Student'} · Semester ${profile['semester'] ?? '—'}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.onPrimary.withValues(alpha: 0.78),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        GridView(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            mainAxisExtent: 112,
+          ),
+          children: [
+            _DashboardKpi(
+              label: 'Attendance',
+              value: attendancePercentage == null ? '—' : '$attendancePercentage%',
+              detail: dashboard?['is_demo'] == true ? 'Demo data' : 'Official',
+            ),
+            _DashboardKpi(
+              label: 'CGPA',
+              value: cgpa == null ? '—' : cgpa.toString(),
+              detail: 'Calculated demo equivalent',
+            ),
+            _DashboardKpi(
+              label: 'Assignments',
+              value: '${assignments['pending'] ?? 0}',
+              detail: '${assignments['submitted'] ?? 0} submitted',
+            ),
+            _DashboardKpi(
+              label: 'Study streak',
+              value: '$studyStreak days',
+              detail: 'Recent present records',
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Today’s timetable', style: theme.textTheme.titleMedium),
+                const SizedBox(height: 10),
+                if (todayEntries.isEmpty)
+                  const Text('No classes are available today.'),
+                for (final entry in todayEntries.take(5))
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    title: Text('${entry['subject_name'] ?? entry['subject_code']}'),
+                    subtitle: Text('${entry['start_time'] ?? ''}–${entry['end_time'] ?? ''} · ${entry['faculty_name'] ?? 'Faculty unavailable'} · ${entry['room_number'] ?? 'Room unavailable'}'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Upcoming assignments', style: theme.textTheme.titleMedium),
+                const SizedBox(height: 8),
+                if (upcoming.isEmpty)
+                  const Text('No upcoming assignments.'),
+                for (final assignment in upcoming)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    title: Text('${assignment['title'] ?? 'Assignment'}'),
+                    subtitle: Text('${assignment['subject_name'] ?? assignment['subject_code'] ?? ''}'),
+                    trailing: Text('${assignment['due_date'] ?? ''}'.length > 10
+                        ? '${assignment['due_date']}'.substring(0, 10)
+                        : '${assignment['due_date'] ?? ''}'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        if (marks.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Recent marks', style: theme.textTheme.titleMedium),
+                  const SizedBox(height: 8),
+                  for (final mark in marks.take(6))
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: Text('${mark['subject_name'] ?? mark['subject_code']}'),
+                      subtitle: Text('${mark['assessment_name'] ?? 'Assessment'}'),
+                      trailing: Text('${mark['score']}/${mark['max_score']}'),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _DashboardKpi extends StatelessWidget {
+  const _DashboardKpi({
+    required this.label,
+    required this.value,
+    required this.detail,
+  });
+
+  final String label;
+  final String value;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(label, style: theme.textTheme.labelMedium),
+            const SizedBox(height: 6),
+            Text(
+              value,
+              style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 4),
+            Text(detail, style: theme.textTheme.bodySmall),
+          ],
+        ),
       ),
     );
   }

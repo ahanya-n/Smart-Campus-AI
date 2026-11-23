@@ -33,17 +33,15 @@ function createNotificationRouter({
           { projection: { _id: 0 } },
         )
         : null;
-      if (!student) {
-        return response.json({
-          linked: false,
-          student_id: null,
-          unread_count: 0,
-          notifications: [],
-        });
-      }
       const collection = await getNotificationsCollection();
+      const ownerFilters = [];
+      if (typeof studentId === 'string' && studentId) ownerFilters.push({ student_id: studentId });
+      if (request.user._id) ownerFilters.push({ recipient_user_id: request.user._id });
+      const ownershipQuery = ownerFilters.length > 1
+        ? { $or: ownerFilters }
+        : ownerFilters[0] || { _id: null };
       const notifications = await collection
-        .find({ student_id: studentId })
+        .find(ownershipQuery)
         .sort({ created_at: -1 })
         .limit(100)
         .toArray();
@@ -59,14 +57,22 @@ function createNotificationRouter({
         title: document.title || 'Attendance Alert',
         message: document.message || '',
         reporting_date: document.reporting_date || '',
+        action_type: document.action_type === 'lost_found_claim' ||
+          document.warning_type === 'lost_found_match'
+          ? 'lost_found_claim'
+          : '',
+        claim_id: document.claim_id ? String(document.claim_id) : '',
+        match_id: document.match_id ? String(document.match_id) : '',
+        lost_report_id: document.lost_report_id ? String(document.lost_report_id) : '',
+        found_report_id: document.found_report_id ? String(document.found_report_id) : '',
         created_at: document.created_at instanceof Date
           ? document.created_at.toISOString()
           : null,
         is_read: Boolean(document.is_read),
       }));
       return response.json({
-        linked: true,
-        student_id: studentId,
+        linked: Boolean(student),
+        student_id: student ? studentId : null,
         unread_count: items.filter((item) => !item.is_read).length,
         notifications: items,
       });
@@ -177,24 +183,34 @@ function createNotificationRouter({
 
   router.patch('/:notification_id/read', authenticate, async (request, response, next) => {
     const studentId = request.user.student_id;
-    if (typeof studentId !== 'string' || !studentId) {
-      return response.status(403).json({ detail: 'Account is not linked to a student record' });
-    }
     if (!/^[a-f\d]{24}$/i.test(request.params.notification_id)) {
       return response.status(404).json({ detail: 'Notification not found' });
     }
     try {
-      const student = await (await getStudentsCollection()).findOne(
-        { student_id: studentId },
-        { projection: { _id: 0 } },
-      );
-      if (!student) {
+      const student = typeof studentId === 'string' && studentId
+        ? await (await getStudentsCollection()).findOne(
+          { student_id: studentId },
+          { projection: { _id: 0 } },
+        )
+        : null;
+      const notifications = await getNotificationsCollection();
+      const notificationId = new ObjectId(request.params.notification_id);
+      if (!student && !await notifications.findOne({
+        _id: notificationId,
+        recipient_user_id: request.user._id,
+      })) {
         return response.status(403).json({ detail: 'Account is not linked to a student record' });
       }
-      const result = await (await getNotificationsCollection()).updateOne(
+      const ownerFilters = [];
+      if (student) ownerFilters.push({ student_id: studentId });
+      if (request.user._id) ownerFilters.push({ recipient_user_id: request.user._id });
+      const ownershipQuery = ownerFilters.length > 1
+        ? { $or: ownerFilters }
+        : ownerFilters[0] || { _id: null };
+      const result = await notifications.updateOne(
         {
-          _id: new ObjectId(request.params.notification_id),
-          student_id: studentId,
+          _id: notificationId,
+          ...ownershipQuery,
         },
         { $set: { is_read: true } },
       );

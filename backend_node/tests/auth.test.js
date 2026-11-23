@@ -160,6 +160,7 @@ test('login returns a compatible HS256 token for valid credentials', async () =>
   assert.equal(payload.sub, user._id.toHexString());
   assert.equal(typeof payload.iat, 'number');
   assert.equal(typeof payload.exp, 'number');
+  assert.equal(payload.role, 'faculty');
 });
 
 test('login rejects wrong passwords and unknown accounts uniformly', async () => {

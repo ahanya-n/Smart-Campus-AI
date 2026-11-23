@@ -9,9 +9,12 @@ from bson import ObjectId
 from bson.errors import InvalidId
 
 from database import (
+    academic_progress_collection,
+    assignments_collection,
     attendance_collection,
     attendance_entries_collection,
     database,
+    notifications_collection,
     students_collection,
     timetable_collection,
     users_collection,
@@ -20,6 +23,7 @@ from services.academic_intelligence import analyze_student, generate_study_plan
 from services.data_filters import (
     is_local_demo_account,
     is_local_demo_student,
+    trusted_demo_owner_markers,
     visible_academic_filter,
 )
 
@@ -68,6 +72,25 @@ def detect_intent(query: str, history: list[dict[str, Any]] | None = None) -> st
     def add(intent: str, points: int, *patterns: str) -> None:
         if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
             scores[intent] = max(scores.get(intent, 0), points)
+
+    add(
+        "placement_preparation",
+        11,
+        r"\b(placement|interview|mock interview|resume|aptitude|coding practice|leetcode|dsa)\b",
+        r"\b(target company|job role|hr interview|technical interview)\b",
+        r"\b(java|python|sql|dbms|oop|operating systems|computer networks)\b.{0,50}\b(learn|practice|prepare|interview|question|explain)\b",
+    )
+    add(
+        "create_complaint",
+        12,
+        r"\b(create|submit|file|open)\b.{0,30}\bcomplaint\b",
+        r"\bcomplaint\b.{0,30}\b(create|submit|file|open)\b",
+    )
+    add(
+        "placement_preparation",
+        10,
+        r"\b(study|prepare)\b.{0,40}\b(placement|interview|resume|aptitude)\b",
+    )
 
     add(
         "classroom_location",
@@ -159,6 +182,28 @@ def detect_intent(query: str, history: list[dict[str, Any]] | None = None) -> st
         r"\b(nanna|my)\b.{0,25}\b(attendance|ಹಾಜರಾತಿ)\b",
     )
     add(
+        "student_profile",
+        8,
+        r"\b(my|what is my|which is my)\b.{0,30}\b(name|student id|roll number|course|semester|section)\b",
+        r"\b(my profile|my student details|student profile)\b",
+    )
+    add(
+        "assignments_summary",
+        11,
+        r"\b(assignments?|homework|coursework|deadlines?)\b",
+    )
+    add(
+        "notifications_summary",
+        10,
+        r"\b(notifications?|announcements?|alerts?)\b",
+    )
+    add(
+        "academic_progress",
+        9,
+        r"\b(academic progress|study progress|study sessions|study time|minutes studied)\b",
+        r"\bhow much\b.{0,30}\b(studied|study)\b",
+    )
+    add(
         "assigned_subjects",
         9,
         r"\b(assigned subjects|my subjects|subjects assigned|assigned classes)\b",
@@ -166,6 +211,12 @@ def detect_intent(query: str, history: list[dict[str, Any]] | None = None) -> st
         r"\b(assigned|nanage assign|ನನಗೆ ನೀಡಿದ)\b.{0,35}\b(subjects|classes|ವಿಷಯ)\b",
         r"\b(which|what)\b.{0,30}\b(subjects|classes)\b.{0,30}\b(teaching|teach|handling)\b",
         r"\b(subjects|classes)\b.{0,30}\b(i am teaching|am i teaching|i teach)\b",
+    )
+    add(
+        "academic_focus",
+        10,
+        r"\b(which|what)\b.{0,40}\b(subjects?|topics?)\b.{0,30}\b(focus|improve|prioritize|study)\b",
+        r"\bwhat should i focus on\b",
     )
     add(
         "assigned_student_count",
@@ -176,8 +227,10 @@ def detect_intent(query: str, history: list[dict[str, Any]] | None = None) -> st
     )
     add(
         "marks_summary",
-        9,
+        12,
         r"\b(internal marks|marks average|marks summary|scores|grades)\b",
+        r"\b(marks|scores|grades)\b.{0,40}\b(each|all|every|subject|subjects)\b",
+        r"\b(each|all|every)\b.{0,40}\b(subject|subjects)\b.{0,40}\b(marks|scores|grades)\b",
         r"\b(marks|ಅಂಕಗಳು)\b.{0,35}\b(average|summary|eshtu|ಎಷ್ಟು)\b",
         r"\b(average|summary)\b.{0,25}\b(marks|ಅಂಕಗಳು)\b",
         r"\b(show|list|display|what are|what is|give me)\b.{0,30}\b(my )?(internal )?marks\b",
@@ -201,10 +254,13 @@ def detect_intent(query: str, history: list[dict[str, Any]] | None = None) -> st
     if not scores:
         return "general"
     order = (
+        "create_complaint", "placement_preparation",
         "classroom_location", "faculty_details", "next_class", "today_timetable",
         "study_plan", "free_hours", "absent_classes", "low_attendance",
-        "subject_attendance", "attendance_summary", "assigned_subjects",
-        "assigned_student_count", "marks_summary", "student_performance", "academic_risk",
+        "subject_attendance", "attendance_summary", "student_profile",
+        "assignments_summary", "notifications_summary", "academic_progress",
+        "assigned_subjects", "academic_focus", "assigned_student_count",
+        "marks_summary", "student_performance", "academic_risk",
     )
     return max(order, key=lambda intent: scores.get(intent, 0))
 
@@ -351,30 +407,82 @@ def _has_next_class_context(history: list[dict[str, Any]] | None) -> bool:
     )
 
 
-def _read_student_context(student: dict | None, is_demo: bool = False) -> dict[str, Any]:
+def _read_student_context(
+    student: dict | None,
+    is_demo: bool = False,
+    user: dict | None = None,
+) -> dict[str, Any]:
     seeded_demo_student = is_local_demo_student(student)
+    seeded_demo_account = is_local_demo_account(user)
+    synthetic_profile = bool(
+        student
+        and (student.get("is_demo") is True or student.get("synthetic_demo") is True)
+        and not seeded_demo_student
+    )
+    demo_ownership_mismatch = bool(
+        user is not None
+        and student
+        and seeded_demo_account != seeded_demo_student
+    )
+    if user is not None and student:
+        account_markers = trusted_demo_owner_markers(user)
+        student_markers = trusted_demo_owner_markers(student)
+        marker_match = bool(
+            account_markers
+            and student_markers
+            and account_markers & student_markers
+        )
+        if account_markers or student_markers:
+            demo_ownership_mismatch = not marker_match
     if (
         not student
         or is_demo
-        or (
-            (student.get("is_demo") is True or student.get("synthetic_demo") is True)
-            and not seeded_demo_student
-        )
+        or synthetic_profile
+        or demo_ownership_mismatch
     ):
+        limitation = (
+            "The linked student profile is marked as synthetic/demo data. "
+            "Official academic records are unavailable; ask a college administrator "
+            "to verify and relink your account."
+            if synthetic_profile
+            else (
+                "The local demo account and student profile do not have matching "
+                "demo ownership markers; no academic records were loaded."
+                if demo_ownership_mismatch
+                else "No non-synthetic linked student records are available."
+            )
+        )
         return {
             "linked": False,
             "student": None,
             "academic_report": None,
-            "data_limitations": ["No non-synthetic linked student records are available."],
+            "data_limitations": [limitation],
             "timetable_entries": [],
         }
 
     student_id = student.get("student_id")
-    visibility = visible_academic_filter(student)
+    visibility = visible_academic_filter(user if user is not None else student)
     academic_query = {"student_id": student_id, **visibility}
     attendance = list(attendance_collection.find(academic_query, {"_id": 0}))
     attendance_entries = list(attendance_entries_collection.find(academic_query, {"_id": 0}))
     marks = list(database["marks"].find(academic_query, {"_id": 0}))
+    assignments = []
+    notifications = []
+    progress_sessions = []
+    if user is not None:
+        assignments = list(assignments_collection.find(
+            academic_query,
+            {"_id": 0},
+        ).sort("due_date", 1).limit(100))
+        notifications = list(notifications_collection.find(
+            academic_query,
+            {"_id": 0},
+        ).sort("created_at", -1).limit(20))
+        if user.get("_id") is not None:
+            progress_sessions = list(academic_progress_collection.find(
+                {"user_id": user["_id"], "student_id": student_id},
+                {"_id": 0, "user_id": 0},
+            ).sort("created_at", -1).limit(100))
     report = analyze_student(student, attendance, attendance_entries, marks)
     semester = student.get("semester")
     try:
@@ -408,6 +516,9 @@ def _read_student_context(student: dict | None, is_demo: bool = False) -> dict[s
             ),
         ],
         "timetable_entries": timetable,
+        "assignments": assignments,
+        "notifications": notifications,
+        "academic_progress": progress_sessions,
         "is_demo": seeded_demo_student,
     }
 
@@ -513,12 +624,13 @@ def _student_reply(intent: str, data: dict[str, Any], query: str, day: str, now:
     now_minutes = now.hour * 60 + now.minute
     study_plan: list[dict] = []
     recommendations: list[str] = []
+    timetable_label = "demo" if data.get("is_demo") else "official"
 
     if intent in {"next_class", "classroom_location", "faculty_details"}:
         target, ongoing, upcoming = _next_class(entries, now_minutes)
         if target is None:
             if not entries:
-                return f"No official timetable entries are available for {day}.", study_plan, recommendations
+                return f"No {timetable_label} timetable entries are available for {day}.", study_plan, recommendations
             return f"No upcoming classes remain on your {day} timetable.", study_plan, recommendations
         if ongoing:
             reply = f"Your current class is in progress. {_class_details(target)}."
@@ -534,12 +646,12 @@ def _student_reply(intent: str, data: dict[str, Any], query: str, day: str, now:
 
     if intent == "today_timetable":
         if not entries:
-            return f"No official classes are listed for {day}.", study_plan, recommendations
+            return f"No {timetable_label} classes are listed for {day}.", study_plan, recommendations
         lines = [
             f"{_format_clock(item['_start'])}–{_format_clock(item['_end'])}: {_class_details(item)}"
             for item in entries
         ]
-        return f"Your official timetable for {day}:\n" + "\n".join(lines), study_plan, recommendations
+        return f"Your {timetable_label} timetable for {day}:\n" + "\n".join(lines), study_plan, recommendations
 
     if intent == "free_hours":
         after_reference = "after that" in _normalise_text(query) and _has_next_class_context(history)
@@ -549,7 +661,7 @@ def _student_reply(intent: str, data: dict[str, Any], query: str, day: str, now:
             after = next_entry["_end"]
         gaps = _free_gaps(entries, now_minutes, after)
         if not entries:
-            return f"No official timetable entries are available for {day}, so free hours cannot be calculated.", study_plan, recommendations
+            return f"No {timetable_label} timetable entries are available for {day}, so free hours cannot be calculated.", study_plan, recommendations
         if not gaps:
             return f"No remaining free interval between scheduled classes is recorded for {day}.", study_plan, recommendations
         lines = [
@@ -564,7 +676,7 @@ def _student_reply(intent: str, data: dict[str, Any], query: str, day: str, now:
         subjects = report["subjects"]
         available = [item for item in subjects if item["attendance_percentage"] is not None]
         if attendance["overall_percentage"] is None:
-            return "Attendance information is unavailable because no valid official attendance totals are recorded.", study_plan, recommendations
+            return "Attendance information is unavailable because no valid attendance totals are recorded.", study_plan, recommendations
         if intent == "attendance_summary":
             absent = attendance["total_classes"] - attendance["present_classes"]
             return (
@@ -620,6 +732,123 @@ def _student_reply(intent: str, data: dict[str, Any], query: str, day: str, now:
             recommendations,
         )
 
+    if intent == "student_profile":
+        profile = student
+        details = [
+            f"Name: {profile.get('name') or 'not recorded'}",
+            f"Student ID: {profile.get('student_id') or 'not recorded'}",
+            f"Course: {profile.get('course') or profile.get('department') or 'not recorded'}",
+            f"Semester: {profile.get('semester') or 'not recorded'}",
+        ]
+        if profile.get("section"):
+            details.append(f"Section: {profile['section']}")
+        return "Your linked student details: " + "; ".join(details) + ".", study_plan, recommendations
+
+    if intent == "assigned_subjects":
+        subjects_by_code = {
+            str(subject.get("subject_code", "")).upper(): subject.get("subject_name") or subject.get("subject_code")
+            for subject in report["subjects"]
+            if subject.get("subject_code")
+        }
+        for entry in data["timetable_entries"]:
+            code = str(entry.get("subject_code", "")).upper()
+            if code:
+                subjects_by_code.setdefault(code, entry.get("subject_name") or code)
+        if not subjects_by_code:
+            return "No subject records are available for your linked account.", study_plan, recommendations
+        return "Your recorded subjects: " + "; ".join(
+            f"{code} ({subjects_by_code[code]})" if subjects_by_code[code] != code else code
+            for code in sorted(subjects_by_code)
+        ) + ".", study_plan, recommendations
+
+    if intent == "assignments_summary":
+        assignments = data["assignments"]
+        if not assignments:
+            return (
+                "No assignment records are available for your linked account, "
+                "so I cannot confirm pending assignments or deadlines.",
+                study_plan,
+                recommendations,
+            )
+        pending = [item for item in assignments if item.get("status") != "submitted"]
+        if not pending:
+            return (
+                f"No pending assignments are recorded; all {len(assignments)} recorded assignments are submitted.",
+                study_plan,
+                recommendations,
+            )
+        details = []
+        for assignment in pending[:5]:
+            due_date = assignment.get("due_date")
+            if isinstance(due_date, datetime):
+                due_date = due_date.date().isoformat()
+            details.append(
+                f"{assignment.get('title') or 'Untitled assignment'} "
+                f"(due {str(due_date)[:10] if due_date else 'date not recorded'})"
+            )
+        return (
+            f"You have {len(pending)} pending of {len(assignments)} recorded assignments: "
+            + "; ".join(details)
+            + ".",
+            study_plan,
+            recommendations,
+        )
+
+    if intent == "notifications_summary":
+        notifications = data["notifications"]
+        if not notifications:
+            return "No notifications are currently recorded for your account.", study_plan, recommendations
+        summaries = [
+            str(item.get("title") or item.get("message") or "Campus notification").strip()
+            for item in notifications[:5]
+        ]
+        return (
+            f"You have {len(notifications)} recent recorded notifications: "
+            + "; ".join(summaries)
+            + ".",
+            study_plan,
+            recommendations,
+        )
+
+    if intent == "academic_progress":
+        sessions = data["academic_progress"]
+        if not sessions:
+            return "No academic progress sessions have been recorded for your account yet.", study_plan, recommendations
+        subject_minutes: dict[str, int] = {}
+        for session in sessions:
+            subject = str(session.get("subject_name") or session.get("subject_code") or "Other")
+            subject_minutes[subject] = subject_minutes.get(subject, 0) + int(
+                session.get("completed_minutes", 0) or 0
+            )
+        total_minutes = sum(subject_minutes.values())
+        summary = ", ".join(
+            f"{subject}: {minutes} min"
+            for subject, minutes in sorted(subject_minutes.items())
+        )
+        return (
+            f"You have logged {total_minutes} study minutes across {len(sessions)} sessions. "
+            f"By subject: {summary}.",
+            study_plan,
+            recommendations,
+        )
+
+    if intent == "academic_focus":
+        if (
+            report["attendance"]["overall_percentage"] is None
+            and not report["internal_marks"]["available"]
+        ):
+            return "I cannot identify focus subjects because no valid attendance or marks are recorded.", study_plan, recommendations
+        subjects_by_code = {
+            item["subject_code"]: item["subject_name"]
+            for item in report["subjects"]
+            if item.get("subject_code") in report["weak_subjects"]
+        }
+        if not subjects_by_code:
+            return "Your recorded attendance and marks do not identify a below-threshold subject to prioritize.", study_plan, recommendations
+        return "Based on your recorded attendance and marks, focus on: " + ", ".join(
+            subjects_by_code[code] for code in sorted(subjects_by_code)
+        ) + ".", study_plan, recommendations
+
     if intent in {"student_performance", "academic_risk"}:
         recommendations = report["recommendations"]
         if report["risk_level"] == "insufficient_data":
@@ -638,8 +867,28 @@ def _student_reply(intent: str, data: dict[str, Any], query: str, day: str, now:
         recommendations = report["recommendations"]
         return "Here is a study plan based on your recorded weak subjects, attendance trend, marks, and timetable.", study_plan, recommendations
 
+    if intent == "placement_preparation":
+        return (
+            "I can help with placement preparation. Tell me the target role or company, "
+            "your strongest and weakest subjects, and whether you want aptitude, coding, "
+            "HR, technical interview, or resume practice.",
+            study_plan,
+            [
+                "Start with a short knowledge check.",
+                "Create a focused daily practice plan.",
+                "Explain solutions and mistakes, not only final answers.",
+            ],
+        )
+
+    if intent == "create_complaint":
+        return (
+            "I can prepare a complaint for confirmation, but I need the category, title and description.",
+            study_plan,
+            ["Use category: academic, facilities, transport, library, safety, or other."],
+        )
+
     return (
-        f"Hi {student.get('name') or 'there'}! I can answer questions about your classes, rooms, faculty, free gaps, attendance, missed classes, marks, academic risk, and study plans. I use only your linked official records.",
+        f"Hi {student.get('name') or 'there'}! I can answer questions about your classes, rooms, faculty, free gaps, attendance, missed classes, marks, academic risk, and study plans. I use only your linked student records.",
         study_plan,
         recommendations,
     )
@@ -857,7 +1106,7 @@ def process_assistant_query(
         limitations = context["data_limitations"]
         suggestions = FACULTY_SUGGESTIONS
     else:
-        context = _read_student_context(student, is_demo=is_demo)
+        context = _read_student_context(student, is_demo=is_demo, user=user)
         if context["linked"]:
             reply, plan, recommendations = _student_reply(
                 intent, context, query, day, current, history,
