@@ -31,7 +31,6 @@ class _MoodScreenState extends State<MoodScreen> {
   bool _submitting = false;
   String? _error;
   List<Map<String, dynamic>> _checkIns = [];
-  final Map<String, String> _localReflections = {};
   Map<String, dynamic>? _analytics;
 
   bool get _isStudent => _auth.user?.isStudent == true;
@@ -89,7 +88,6 @@ class _MoodScreenState extends State<MoodScreen> {
     _submitting = false;
     _error = null;
     _checkIns = [];
-    _localReflections.clear();
     _analytics = null;
     _reflectionController.clear();
   }
@@ -127,13 +125,11 @@ class _MoodScreenState extends State<MoodScreen> {
       _error = null;
     });
     try {
-      final result = await _api.createMoodCheckIn(_selectedMood);
+      await _api.createMoodCheckIn(
+        _selectedMood,
+        reflection: _reflectionController.text,
+      );
       if (!mounted || identity != _authIdentity || !_isStudent) return;
-      final reflection = _reflectionController.text.trim();
-      final checkInId = result['id']?.toString();
-      if (reflection.isNotEmpty && checkInId != null) {
-        _localReflections[checkInId] = reflection;
-      }
       _reflectionController.clear();
       await _load();
     } on ApiException catch (error) {
@@ -254,7 +250,7 @@ class _MoodScreenState extends State<MoodScreen> {
                 controller: _reflectionController,
                 minLines: 2,
                 maxLines: 4,
-                maxLength: 1000,
+                maxLength: 2000,
                 decoration: const InputDecoration(
                   labelText: 'Optional private reflection',
                   hintText: 'Write a note for yourself (optional)',
@@ -262,7 +258,7 @@ class _MoodScreenState extends State<MoodScreen> {
                 ),
               ),
               const Text(
-                'Reflections are kept only in this screen session because the service does not accept or return them. They are never sent to chat.',
+                'Reflections are stored with your private check-in and are never sent to assistant chat.',
               ),
               const SizedBox(height: 12),
               FilledButton.icon(
@@ -300,7 +296,6 @@ class _MoodScreenState extends State<MoodScreen> {
       children: _checkIns.map((entry) {
         final mood = entry['mood']?.toString() ?? '';
         final created = entry['created_at']?.toString() ?? '';
-        final id = entry['id']?.toString() ?? '';
         return Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -318,7 +313,7 @@ class _MoodScreenState extends State<MoodScreen> {
                       ? null
                       : Text(entry['sentiment'].toString()),
                 ),
-                if (_localReflections[id] case final reflection?)
+                if (entry['reflection'] case final String reflection)
                   Text('Your private reflection: $reflection'),
                 if (entry['support_message'] != null) ...[
                   const SizedBox(height: 8),

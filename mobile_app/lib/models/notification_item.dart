@@ -13,6 +13,11 @@ class NotificationItem {
     required this.reportingDate,
     this.createdAt,
     required this.isRead,
+    this.actionType,
+    this.claimId,
+    this.matchId,
+    this.lostReportId,
+    this.foundReportId,
   });
 
   final String id;
@@ -28,6 +33,11 @@ class NotificationItem {
   final String reportingDate;
   final String? createdAt;
   final bool isRead;
+  final String? actionType;
+  final String? claimId;
+  final String? matchId;
+  final String? lostReportId;
+  final String? foundReportId;
 
   factory NotificationItem.fromJson(Map<String, dynamic> json) {
     return NotificationItem(
@@ -44,6 +54,11 @@ class NotificationItem {
       reportingDate: json['reporting_date']?.toString() ?? '',
       createdAt: json['created_at']?.toString(),
       isRead: json['is_read'] == true,
+      actionType: json['action_type']?.toString(),
+      claimId: json['claim_id']?.toString(),
+      matchId: json['match_id']?.toString(),
+      lostReportId: json['lost_report_id']?.toString(),
+      foundReportId: json['found_report_id']?.toString(),
     );
   }
 }

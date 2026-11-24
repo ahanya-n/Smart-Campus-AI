@@ -12,6 +12,8 @@ import 'complaints_screen.dart';
 import 'faculty_dashboard_screen.dart';
 import 'feature_preview_screen.dart';
 import 'library_screen.dart';
+import 'lost_found_screen.dart';
+import 'mood_screen.dart';
 import 'notifications_screen.dart';
 import 'timetable_screen.dart';
 import 'transport_screen.dart';
@@ -49,8 +51,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _dashboardError = null;
     });
     try {
-      final dashboard =
-          await AppScope.read(context).api.getStudentDashboard();
+      final dashboard = await AppScope.read(context).api.getStudentDashboard();
       if (mounted) setState(() => _dashboard = dashboard);
     } on ApiException catch (error) {
       if (mounted) setState(() => _dashboardError = error.message);
@@ -87,7 +88,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: const Text('Smart Campus'),
         actions: [
           IconButton(
-            tooltip: 'Attendance Notices',
+            tooltip: 'Notifications',
             icon: const Icon(Icons.notifications_outlined),
             onPressed: () => _open(context, const NotificationsScreen()),
           ),
@@ -200,14 +201,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 const SizedBox(height: 12),
                 _TileGrid(
                   tiles: [
-                    _FeatureTile(
-                      icon: Icons.smart_toy_rounded,
-                      title: 'AI Assistant',
-                      subtitle: 'Chat & timetable queries',
-                      live: true,
-                      onTap: () =>
-                          _open(context, const CampusAssistantScreen()),
-                    ),
+                    if (user?.isStudent == true || user?.isFaculty == true)
+                      _FeatureTile(
+                        icon: Icons.smart_toy_rounded,
+                        title: 'AI Assistant',
+                        subtitle: 'Chat & timetable queries',
+                        live: true,
+                        onTap: () =>
+                            _open(context, const CampusAssistantScreen()),
+                      ),
                     if (user?.isStudent == true)
                       _FeatureTile(
                         icon: Icons.insights_rounded,
@@ -219,18 +221,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     _FeatureTile(
                       icon: Icons.notification_important_rounded,
-                      title: 'Attendance Notices',
-                      subtitle: 'Weekly warning alerts',
+                      title: 'Notifications',
+                      subtitle: 'Attendance and campus notices',
                       live: true,
                       onTap: () => _open(context, const NotificationsScreen()),
                     ),
-                    _FeatureTile(
-                      icon: Icons.groups_rounded,
-                      title: 'Student Directory',
-                      subtitle: 'Browse all students',
-                      live: true,
-                      onTap: widget.onOpenStudents,
-                    ),
+                    if (user?.isFaculty == true || user?.isAdmin == true)
+                      _FeatureTile(
+                        icon: Icons.groups_rounded,
+                        title: 'Student Directory',
+                        subtitle: 'Browse all students',
+                        live: true,
+                        onTap: widget.onOpenStudents,
+                      ),
                     _FeatureTile(
                       icon: Icons.fact_check_rounded,
                       title: 'Attendance',
@@ -276,6 +279,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       live: true,
                       onTap: () => _open(context, const TransportScreen()),
                     ),
+                    if (user?.isStudent == true || user?.isAdmin == true)
+                      _FeatureTile(
+                        icon: Icons.find_in_page_outlined,
+                        title: 'Lost and Found',
+                        subtitle: user?.isAdmin == true
+                            ? 'Review match requests'
+                            : 'Report and match items',
+                        live: true,
+                        onTap: () => _open(context, const LostFoundScreen()),
+                      ),
                     if (user?.isStudent == true)
                       _FeatureTile(
                         icon: Icons.report_problem_rounded,
@@ -283,6 +296,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         subtitle: 'Submit and track requests',
                         live: true,
                         onTap: () => _open(context, const ComplaintsScreen()),
+                      ),
+                    if (user?.isStudent == true ||
+                        user?.isFaculty == true ||
+                        user?.isAdmin == true)
+                      _FeatureTile(
+                        icon: Icons.favorite_border_rounded,
+                        title: 'Mood and wellbeing',
+                        subtitle: user?.isStudent == true
+                            ? 'Private check-ins'
+                            : 'Aggregate wellbeing analytics',
+                        live: true,
+                        onTap: () => _open(context, const MoodScreen()),
                       ),
                     _FeatureTile(
                       icon: Icons.event_rounded,
@@ -368,7 +393,10 @@ class _StudentDashboardOverview extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(20),
             gradient: LinearGradient(
-              colors: [scheme.primary, Color.lerp(scheme.primary, Colors.black, 0.22)!],
+              colors: [
+                scheme.primary,
+                Color.lerp(scheme.primary, Colors.black, 0.22)!,
+              ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -416,7 +444,9 @@ class _StudentDashboardOverview extends StatelessWidget {
           children: [
             _DashboardKpi(
               label: 'Attendance',
-              value: attendancePercentage == null ? '—' : '$attendancePercentage%',
+              value: attendancePercentage == null
+                  ? '—'
+                  : '$attendancePercentage%',
               detail: dashboard?['is_demo'] == true ? 'Demo data' : 'Official',
             ),
             _DashboardKpi(
@@ -451,8 +481,12 @@ class _StudentDashboardOverview extends StatelessWidget {
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     dense: true,
-                    title: Text('${entry['subject_name'] ?? entry['subject_code']}'),
-                    subtitle: Text('${entry['start_time'] ?? ''}–${entry['end_time'] ?? ''} · ${entry['faculty_name'] ?? 'Faculty unavailable'} · ${entry['room_number'] ?? 'Room unavailable'}'),
+                    title: Text(
+                      '${entry['subject_name'] ?? entry['subject_code']}',
+                    ),
+                    subtitle: Text(
+                      '${entry['start_time'] ?? ''}–${entry['end_time'] ?? ''} · ${entry['faculty_name'] ?? 'Faculty unavailable'} · ${entry['room_number'] ?? 'Room unavailable'}',
+                    ),
                   ),
               ],
             ),
@@ -465,19 +499,25 @@ class _StudentDashboardOverview extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Upcoming assignments', style: theme.textTheme.titleMedium),
+                Text(
+                  'Upcoming assignments',
+                  style: theme.textTheme.titleMedium,
+                ),
                 const SizedBox(height: 8),
-                if (upcoming.isEmpty)
-                  const Text('No upcoming assignments.'),
+                if (upcoming.isEmpty) const Text('No upcoming assignments.'),
                 for (final assignment in upcoming)
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     dense: true,
                     title: Text('${assignment['title'] ?? 'Assignment'}'),
-                    subtitle: Text('${assignment['subject_name'] ?? assignment['subject_code'] ?? ''}'),
-                    trailing: Text('${assignment['due_date'] ?? ''}'.length > 10
-                        ? '${assignment['due_date']}'.substring(0, 10)
-                        : '${assignment['due_date'] ?? ''}'),
+                    subtitle: Text(
+                      '${assignment['subject_name'] ?? assignment['subject_code'] ?? ''}',
+                    ),
+                    trailing: Text(
+                      '${assignment['due_date'] ?? ''}'.length > 10
+                          ? '${assignment['due_date']}'.substring(0, 10)
+                          : '${assignment['due_date'] ?? ''}',
+                    ),
                   ),
               ],
             ),
@@ -497,8 +537,12 @@ class _StudentDashboardOverview extends StatelessWidget {
                     ListTile(
                       contentPadding: EdgeInsets.zero,
                       dense: true,
-                      title: Text('${mark['subject_name'] ?? mark['subject_code']}'),
-                      subtitle: Text('${mark['assessment_name'] ?? 'Assessment'}'),
+                      title: Text(
+                        '${mark['subject_name'] ?? mark['subject_code']}',
+                      ),
+                      subtitle: Text(
+                        '${mark['assessment_name'] ?? 'Assessment'}',
+                      ),
                       trailing: Text('${mark['score']}/${mark['max_score']}'),
                     ),
                 ],
@@ -536,7 +580,9 @@ class _DashboardKpi extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               value,
-              style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
             ),
             const SizedBox(height: 4),
             Text(detail, style: theme.textTheme.bodySmall),

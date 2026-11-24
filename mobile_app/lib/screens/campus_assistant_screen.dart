@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
@@ -17,11 +18,204 @@ class AssistantPickedDocument {
     required this.name,
     required this.size,
     required this.path,
+    this.bytes,
   });
 
   final String name;
   final int size;
   final String? path;
+  final Uint8List? bytes;
+}
+
+class _StudyQuizDialog extends StatefulWidget {
+  const _StudyQuizDialog({required this.title, required this.questions});
+
+  final String title;
+  final List<Map<String, dynamic>> questions;
+
+  @override
+  State<_StudyQuizDialog> createState() => _StudyQuizDialogState();
+}
+
+class _StudyQuizDialogState extends State<_StudyQuizDialog> {
+  final TextEditingController _answerController = TextEditingController();
+  int _index = 0;
+  bool _checked = false;
+  bool _correct = false;
+
+  @override
+  void dispose() {
+    _answerController.dispose();
+    super.dispose();
+  }
+
+  void _next() {
+    setState(() {
+      _index++;
+      _checked = false;
+      _correct = false;
+      _answerController.clear();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasQuestions = widget.questions.isNotEmpty;
+    final question = hasQuestions
+        ? widget.questions[_index]
+        : const <String, dynamic>{};
+    final answer = question['answer']?.toString().trim() ?? '';
+    return AlertDialog(
+      title: Text(widget.title),
+      content: SizedBox(
+        width: 440,
+        child: !hasQuestions
+            ? const Text('No quiz questions could be generated.')
+            : SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Question ${_index + 1} of ${widget.questions.length}',
+                    ),
+                    const SizedBox(height: 12),
+                    Text(question['question']?.toString() ?? ''),
+                    const SizedBox(height: 12),
+                    TextField(
+                      key: const Key('study_quiz_answer'),
+                      controller: _answerController,
+                      enabled: !_checked,
+                      decoration: const InputDecoration(
+                        labelText: 'Your answer',
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                      minLines: 1,
+                      maxLines: 3,
+                    ),
+                    if (_checked) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        _correct
+                            ? 'Correct.'
+                            : 'Not quite. Suggested answer: $answer',
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+        if (hasQuestions)
+          FilledButton(
+            onPressed: _checked
+                ? (_index + 1 < widget.questions.length ? _next : null)
+                : _answerController.text.trim().isEmpty
+                ? null
+                : () {
+                    setState(() {
+                      _checked = true;
+                      _correct =
+                          _answerController.text.trim().toLowerCase() ==
+                          answer.toLowerCase();
+                    });
+                  },
+            child: Text(
+              _checked
+                  ? (_index + 1 < widget.questions.length
+                        ? 'Next question'
+                        : 'Finished')
+                  : 'Check answer',
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _StudyFlashcardsDialog extends StatefulWidget {
+  const _StudyFlashcardsDialog({required this.title, required this.cards});
+
+  final String title;
+  final List<Map<String, dynamic>> cards;
+
+  @override
+  State<_StudyFlashcardsDialog> createState() => _StudyFlashcardsDialogState();
+}
+
+class _StudyFlashcardsDialogState extends State<_StudyFlashcardsDialog> {
+  int _index = 0;
+  bool _showBack = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasCards = widget.cards.isNotEmpty;
+    final card = hasCards ? widget.cards[_index] : const <String, dynamic>{};
+    return AlertDialog(
+      title: Text(widget.title),
+      content: SizedBox(
+        width: 420,
+        child: hasCards
+            ? InkWell(
+                key: const Key('study_flashcard'),
+                onTap: () => setState(() => _showBack = !_showBack),
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Card ${_index + 1} of ${widget.cards.length} · '
+                          '${_showBack ? 'Answer' : 'Prompt'}',
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          (card[_showBack ? 'back' : 'front'] ?? '').toString(),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 16),
+                        const Text('Tap the card to flip it.'),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            : const Text('No flashcards could be generated.'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+        if (hasCards)
+          TextButton(
+            onPressed: _index == 0
+                ? null
+                : () => setState(() {
+                    _index--;
+                    _showBack = false;
+                  }),
+            child: const Text('Previous'),
+          ),
+        if (hasCards)
+          FilledButton(
+            onPressed: _index + 1 >= widget.cards.length
+                ? null
+                : () => setState(() {
+                    _index++;
+                    _showBack = false;
+                  }),
+            child: const Text('Next'),
+          ),
+      ],
+    );
+  }
 }
 
 class _ChatMessage {
@@ -32,8 +226,11 @@ class _ChatMessage {
     this.intent,
     this.provider,
     this.action,
+    this.suggestions = const [],
+    this.sources = const [],
     this.requiresConfirmation = false,
     this.confirmationId,
+    this.retryQuery,
   });
 
   final String text;
@@ -42,8 +239,11 @@ class _ChatMessage {
   final String? intent;
   final String? provider;
   final Map<String, dynamic>? action;
+  final List<String> suggestions;
+  final List<String> sources;
   final bool requiresConfirmation;
   final String? confirmationId;
+  final String? retryQuery;
 }
 
 class CampusAssistantScreen extends StatefulWidget {
@@ -62,7 +262,20 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
 
   final TextEditingController _controller = TextEditingController();
   final TextEditingController _careerGoalController = TextEditingController();
+  final TextEditingController _companyController = TextEditingController();
+  final TextEditingController _targetRoleController = TextEditingController();
+  final TextEditingController _salaryController = TextEditingController();
+  final TextEditingController _currentSkillsController =
+      TextEditingController();
+  final TextEditingController _skillsToImproveController =
+      TextEditingController();
+  final TextEditingController _preparationLevelController =
+      TextEditingController();
+  final TextEditingController _applicationTimelineController =
+      TextEditingController();
   final TextEditingController _jobDescriptionController =
+      TextEditingController();
+  final TextEditingController _moodReflectionController =
       TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final SpeechToText _speech = SpeechToText();
@@ -75,14 +288,23 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
   bool _listening = false;
   String _selectedMode = 'general';
   String? _conversationId;
+  String? _conversationError;
   List<Map<String, dynamic>> _conversations = [];
   final Map<String, String> _conversationModes = {};
   List<Map<String, dynamic>> _studyDocuments = [];
+  String? _studyDocumentId;
   bool _studyDocumentsLoading = false;
   bool _studyUploadLoading = false;
   String? _studyDocumentsError;
   String? _studyUploadError;
   String? _quizLoadingId;
+  String? _flashcardsLoadingId;
+  String _selectedMood = 'neutral';
+  bool _moodCheckInLoading = false;
+  bool _moodCheckInSubmitting = false;
+  String? _moodCheckInError;
+  String? _moodCheckInMessage;
+  List<Map<String, dynamic>> _moodCheckIns = [];
   bool _placementResearchLoading = false;
   int _placementResearchRequestId = 0;
   bool _allowExternalProcessing = false;
@@ -110,6 +332,39 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
     'When am I free today?',
     'How much free time do I have between classes?',
   ];
+
+  List<String> _suggestionsForMode() {
+    for (final message in _messages.reversed) {
+      if (!message.isUser && message.suggestions.isNotEmpty) {
+        return message.suggestions;
+      }
+    }
+    return switch (_selectedMode) {
+      'placement' => const [
+        'Create a placement preparation plan.',
+        'What skills should I build for this role?',
+        'Give me a technical interview practice question.',
+      ],
+      'study' => const [
+        'Explain this topic at my current level.',
+        'Create a 7-day study plan.',
+        'Quiz me on the material I uploaded.',
+      ],
+      'mood' => const [
+        'How does a private mood check-in work?',
+        'Can I skip the optional reflection?',
+      ],
+      _ =>
+        _auth.user?.isStudent == true
+            ? _suggestedQuestions
+            : const [
+                'What is my next class?',
+                'Where is my next classroom?',
+                'What is my timetable today?',
+                'Which students need academic attention?',
+              ],
+    };
+  }
 
   @override
   void initState() {
@@ -155,7 +410,15 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
     _tts.stop();
     _controller.dispose();
     _careerGoalController.dispose();
+    _companyController.dispose();
+    _targetRoleController.dispose();
+    _salaryController.dispose();
+    _currentSkillsController.dispose();
+    _skillsToImproveController.dispose();
+    _preparationLevelController.dispose();
+    _applicationTimelineController.dispose();
     _jobDescriptionController.dispose();
+    _moodReflectionController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -175,15 +438,24 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
   void _resetAccountState() {
     _selectedMode = 'general';
     _conversationId = null;
+    _conversationError = null;
     _loading = false;
     _conversationModes.clear();
     _conversations = [];
     _studyDocuments = [];
+    _studyDocumentId = null;
     _studyDocumentsLoading = false;
     _studyUploadLoading = false;
     _studyDocumentsError = null;
     _studyUploadError = null;
     _quizLoadingId = null;
+    _flashcardsLoadingId = null;
+    _selectedMood = 'neutral';
+    _moodCheckInLoading = false;
+    _moodCheckInSubmitting = false;
+    _moodCheckInError = null;
+    _moodCheckInMessage = null;
+    _moodCheckIns = [];
     _placementResearchLoading = false;
     _placementResearchRequestId++;
     _placementUploadLoading = false;
@@ -195,6 +467,14 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
     _placementResearchError = null;
     _allowExternalProcessing = false;
     _jobDescriptionController.clear();
+    _companyController.clear();
+    _targetRoleController.clear();
+    _salaryController.clear();
+    _currentSkillsController.clear();
+    _skillsToImproveController.clear();
+    _preparationLevelController.clear();
+    _applicationTimelineController.clear();
+    _moodReflectionController.clear();
     _placementUploadError = null;
     _placementUploadMessage = null;
     _careerGoalController.clear();
@@ -222,10 +502,14 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
     });
   }
 
-  Future<void> _sendMessage(String text) async {
+  Future<bool> _sendMessage(
+    String text, {
+    Map<String, dynamic>? placementContext,
+  }) async {
     final query = text.trim();
-    if (query.isEmpty || _loading) return;
+    if (query.isEmpty || _loading) return false;
     final isStudent = _auth.user?.isStudent == true;
+    final mode = isStudent ? _selectedMode : 'general';
     final requestIdentity = _authIdentity;
 
     _controller.clear();
@@ -251,20 +535,35 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
         };
       }).toList();
       String? documentId;
-      if (_selectedMode == 'study' && _studyDocuments.isNotEmpty) {
-        documentId = _studyDocuments.first['id']?.toString();
+      if (_selectedMode == 'study') {
+        documentId = _studyDocumentId;
       } else if (_selectedMode == 'placement') {
         documentId = _placementDocument?['id']?.toString();
       }
       final res = await api.askAssistant(
         query,
-        mode: isStudent ? _selectedMode : 'general',
+        mode: mode,
         day: _selectedDay,
         history: history,
         conversationId: _conversationId,
         documentId: documentId,
+        placementContext: mode == 'placement'
+            ? placementContext ?? _placementContext()
+            : null,
       );
-      if (!mounted || requestIdentity != _authIdentity) return;
+      if (!mounted || requestIdentity != _authIdentity) return false;
+      final responseMode = res['mode']?.toString();
+      if (responseMode != null && responseMode != mode) {
+        throw const ApiException(
+          'The assistant returned a response for a different mode.',
+        );
+      }
+      final responseText = res['reply'];
+      if (responseText is! String || responseText.trim().isEmpty) {
+        throw const ApiException(
+          'The assistant response did not contain a reply.',
+        );
+      }
       final returnedConversationId = res['conversation_id']?.toString();
       if (returnedConversationId != null && returnedConversationId.isNotEmpty) {
         _conversationId = returnedConversationId;
@@ -275,7 +574,7 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
           (_) => _loadConversations(),
         );
       }
-      var reply = res['reply']?.toString() ?? 'No response received.';
+      var reply = responseText.trim();
       final studyPlan = res['study_plan'];
       if (studyPlan is List && studyPlan.isNotEmpty) {
         reply +=
@@ -301,6 +600,8 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
               time: DateTime.now(),
               intent: res['intent']?.toString(),
               provider: res['provider']?.toString(),
+              suggestions: _stringValues(res['suggestions']),
+              sources: _stringValues(res['sources']),
               action: res['action'] is Map
                   ? Map<String, dynamic>.from(res['action'] as Map)
                   : null,
@@ -311,6 +612,7 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
         });
         _scrollToBottom();
       }
+      return true;
     } on ApiException catch (e) {
       if (mounted && requestIdentity == _authIdentity) {
         setState(() {
@@ -319,17 +621,28 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
               text: '⚠️ ${e.message}',
               isUser: false,
               time: DateTime.now(),
+              retryQuery: query,
             ),
           );
         });
         _scrollToBottom();
       }
+      return false;
     } finally {
       if (mounted && requestIdentity == _authIdentity) {
         setState(() => _loading = false);
       }
     }
   }
+
+  List<String> _stringValues(dynamic value) =>
+      value is List ? value.whereType<String>().toList() : const [];
+
+  List<Map<String, dynamic>> _mapValues(dynamic value) => value is List
+      ? value.whereType<Map>().map((item) {
+          return item.map((key, value) => MapEntry(key.toString(), value));
+        }).toList()
+      : const [];
 
   Future<void> _startVoiceInput() async {
     final available = await _speech.initialize(
@@ -384,10 +697,14 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
   Future<void> _loadConversations() async {
     final identity = _authIdentity;
     final api = AppScope.read(context).api;
+    if (mounted && identity == _authIdentity) {
+      setState(() => _conversationError = null);
+    }
     try {
-      final items = await api.listAssistantConversations();
+      final items = await api.listAssistantConversations(mode: _selectedMode);
       if (!mounted || identity != _authIdentity) return;
       setState(() {
+        _conversationError = null;
         _conversations = items
             .where(
               (conversation) =>
@@ -395,8 +712,9 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
             )
             .toList();
       });
-    } on ApiException {
-      // The chat remains usable if the conversation list is unavailable.
+    } on ApiException catch (error) {
+      if (!mounted || identity != _authIdentity) return;
+      setState(() => _conversationError = error.message);
     }
   }
 
@@ -408,7 +726,7 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
 
   String _normalizeConversationMode(String mode) => switch (mode) {
     'study_buddy' => 'study',
-    'general' || 'placement' || 'study' => mode,
+    'general' || 'placement' || 'study' || 'mood' => mode,
     _ => 'general',
   };
 
@@ -472,7 +790,9 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
     final identity = _authIdentity;
     final api = AppScope.read(context).api;
     try {
-      final conversation = await api.createAssistantConversation();
+      final conversation = await api.createAssistantConversation(
+        mode: _selectedMode,
+      );
       if (!mounted || identity != _authIdentity) return;
       final id = conversation['id']?.toString();
       if (id != null && id.isNotEmpty) {
@@ -557,6 +877,24 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(error.message)));
     }
+  }
+
+  void _retryMessage(_ChatMessage failedMessage) {
+    final query = failedMessage.retryQuery;
+    if (query == null || _loading) return;
+    final failedIndex = _messages.indexOf(failedMessage);
+    if (failedIndex >= 0) {
+      setState(() {
+        _messages.removeAt(failedIndex);
+        final previousIndex = failedIndex - 1;
+        if (previousIndex >= 0 &&
+            _messages[previousIndex].isUser &&
+            _messages[previousIndex].text == query) {
+          _messages.removeAt(previousIndex);
+        }
+      });
+    }
+    _sendMessage(query);
   }
 
   Future<void> _startPlacementPractice() async {
@@ -807,6 +1145,7 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
     setState(() {
       _selectedMode = mode;
       _conversationId = null;
+      _conversationError = null;
       _conversations = [];
       _allowExternalProcessing = false;
       _jobDescriptionController.clear();
@@ -837,6 +1176,8 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _loadPlacementDocuments(),
       );
+    } else if (mode == 'mood') {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadMoodCheckIns());
     }
     _loadConversations();
   }
@@ -851,7 +1192,16 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
     try {
       final documents = await AppScope.read(context).api.getStudyDocuments();
       if (mounted && identity == _authIdentity) {
-        setState(() => _studyDocuments = documents);
+        setState(() {
+          _studyDocuments = documents;
+          final currentId = _studyDocumentId;
+          _studyDocumentId =
+              documents.any((item) => item['id']?.toString() == currentId)
+              ? currentId
+              : documents.isEmpty
+              ? null
+              : documents.first['id']?.toString();
+        });
       }
     } on ApiException catch (error) {
       if (mounted && identity == _authIdentity) {
@@ -860,6 +1210,63 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
     } finally {
       if (mounted && identity == _authIdentity) {
         setState(() => _studyDocumentsLoading = false);
+      }
+    }
+  }
+
+  Future<void> _loadMoodCheckIns() async {
+    if (!mounted || _auth.user?.isStudent != true) return;
+    final identity = _authIdentity;
+    setState(() {
+      _moodCheckInLoading = true;
+      _moodCheckInError = null;
+    });
+    try {
+      final checkIns = await AppScope.read(context).api.getMyMoodCheckIns();
+      if (mounted && identity == _authIdentity && _selectedMode == 'mood') {
+        setState(() => _moodCheckIns = checkIns);
+      }
+    } on ApiException catch (error) {
+      if (mounted && identity == _authIdentity) {
+        setState(() => _moodCheckInError = error.message);
+      }
+    } finally {
+      if (mounted && identity == _authIdentity) {
+        setState(() => _moodCheckInLoading = false);
+      }
+    }
+  }
+
+  Future<void> _submitMoodCheckIn() async {
+    if (_auth.user?.isStudent != true || _moodCheckInSubmitting) return;
+    final identity = _authIdentity;
+    final api = AppScope.read(context).api;
+    setState(() {
+      _moodCheckInSubmitting = true;
+      _moodCheckInError = null;
+      _moodCheckInMessage = null;
+    });
+    try {
+      final result = await api.createMoodCheckIn(
+        _selectedMood,
+        reflection: _moodReflectionController.text,
+      );
+      final checkIns = await api.getMyMoodCheckIns();
+      if (!mounted || identity != _authIdentity) return;
+      setState(() {
+        _moodCheckIns = checkIns;
+        _moodCheckInMessage =
+            result['support_message']?.toString() ??
+            'Your private check-in was saved.';
+        _moodReflectionController.clear();
+      });
+    } on ApiException catch (error) {
+      if (mounted && identity == _authIdentity) {
+        setState(() => _moodCheckInError = error.message);
+      }
+    } finally {
+      if (mounted && identity == _authIdentity) {
+        setState(() => _moodCheckInSubmitting = false);
       }
     }
   }
@@ -895,13 +1302,15 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
       final info = result['document'] is Map
           ? Map<String, dynamic>.from(result['document'] as Map)
           : <String, dynamic>{};
-      final topics = result['chapter_topic_analysis'] is Map
-          ? (Map<String, dynamic>.from(
-                      result['chapter_topic_analysis'] as Map,
-                    )['main_topics']
-                    as List? ??
-                const [])
-          : const [];
+      final chapterAnalysis = result['chapter_topic_analysis'] is Map
+          ? Map<String, dynamic>.from(result['chapter_topic_analysis'] as Map)
+          : const <String, dynamic>{};
+      final importantMaterial = result['important_material'] is Map
+          ? Map<String, dynamic>.from(result['important_material'] as Map)
+          : const <String, dynamic>{};
+      final sampleQuestions = result['sample_exam_questions'] is Map
+          ? Map<String, dynamic>.from(result['sample_exam_questions'] as Map)
+          : const <String, dynamic>{};
       await showDialog<void>(
         context: context,
         builder: (dialogContext) => AlertDialog(
@@ -918,8 +1327,88 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
                   const SizedBox(height: 8),
                   Text(info['summary']?.toString() ?? ''),
                   const SizedBox(height: 12),
-                  const Text('Main topics'),
-                  ...topics.map((topic) => Text('• $topic')),
+                  const Text('Main topics and chapters'),
+                  ..._stringValues(chapterAnalysis['main_topics'])
+                      .map((topic) => Text('• $topic')),
+                  if (_mapValues(chapterAnalysis['chapters_detected'])
+                      .isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Text('Detected chapters'),
+                    ..._mapValues(chapterAnalysis['chapters_detected']).map(
+                      (chapter) => Text(
+                        '• ${chapter['title'] ?? chapter['name'] ?? chapter}',
+                      ),
+                    ),
+                  ],
+                  if (_stringValues(chapterAnalysis['important_subtopics'])
+                      .isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Text('Important subtopics'),
+                    ..._stringValues(chapterAnalysis['important_subtopics'])
+                        .map((topic) => Text('• $topic')),
+                  ],
+                  if (_mapValues(chapterAnalysis['important_definitions'])
+                      .isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Text('Important definitions'),
+                    ..._mapValues(chapterAnalysis['important_definitions']).map(
+                      (definition) => Text(
+                        '• ${definition['front'] ?? ''}\n'
+                        '${definition['back'] ?? ''}',
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  const Text('Important points'),
+                  ..._stringValues(importantMaterial['important_points'])
+                      .map((point) => Text('• $point')),
+                  if (_stringValues(importantMaterial['formulas'])
+                      .isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Text('Formulas'),
+                    ..._stringValues(importantMaterial['formulas'])
+                        .map((formula) => Text('• $formula')),
+                  ],
+                  if (_stringValues(importantMaterial['examples'])
+                      .isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Text('Examples'),
+                    ..._stringValues(importantMaterial['examples'])
+                        .map((example) => Text('• $example')),
+                  ],
+                  if (_stringValues(
+                    importantMaterial['topics_for_more_attention'],
+                  ).isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Text('Topics for more attention'),
+                    ..._stringValues(
+                      importantMaterial['topics_for_more_attention'],
+                    ).map((topic) => Text('• $topic')),
+                  ],
+                  const SizedBox(height: 12),
+                  const Text('Sample exam questions'),
+                  ..._mapValues(sampleQuestions['questions']).map(
+                    (item) => Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        '${item['marks'] ?? ''}-mark: ${item['question'] ?? ''}\n'
+                        'Answer: ${item['answer'] ?? 'Not provided'}',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text('MCQs'),
+                  ..._mapValues(sampleQuestions['mcqs']).map(
+                    (item) => Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        '${item['question'] ?? ''}\n'
+                        'Options: ${_stringValues(item['options']).join(' | ')}\n'
+                        'Answer: ${item['answer'] ?? 'Not provided'}\n'
+                        '${item['explanation'] ?? ''}',
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -949,45 +1438,12 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
       final result = await AppScope.read(context).api.createStudyQuiz(id);
       if (!mounted || identity != _authIdentity) return;
       setState(() => _quizLoadingId = null);
-      final questions = (result['questions'] as List?) ?? const [];
+      final questions = _mapValues(result['questions']);
       await showDialog<void>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: Text('Quiz: ${document['filename'] ?? 'Study material'}'),
-          content: SizedBox(
-            width: 440,
-            child: questions.isEmpty
-                ? const Text(
-                    'No quiz questions could be generated from this document.',
-                  )
-                : SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: questions.whereType<Map>().map((rawQuestion) {
-                        final question = rawQuestion.map(
-                          (key, value) => MapEntry(key.toString(), value),
-                        );
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(question['question']?.toString() ?? ''),
-                              const SizedBox(height: 4),
-                              Text('Answer: ${question['answer'] ?? ''}'),
-                            ],
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Close'),
-            ),
-          ],
+        builder: (_) => _StudyQuizDialog(
+          title: 'Quiz: ${document['filename'] ?? 'Study material'}',
+          questions: questions,
         ),
       );
     } on ApiException catch (error) {
@@ -1002,13 +1458,65 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
     }
   }
 
+  Future<void> _generateStudyFlashcards(Map<String, dynamic> document) async {
+    if (_auth.user?.isStudent != true) return;
+    final identity = _authIdentity;
+    final id = document['id']?.toString();
+    if (id == null || id.isEmpty) return;
+    setState(() => _flashcardsLoadingId = id);
+    try {
+      final result = await AppScope.read(context).api.createStudyFlashcards(id);
+      if (!mounted || identity != _authIdentity) return;
+      setState(() => _flashcardsLoadingId = null);
+      await showDialog<void>(
+        context: context,
+        builder: (_) => _StudyFlashcardsDialog(
+          title: 'Flashcards: ${document['filename'] ?? 'Study material'}',
+          cards: _mapValues(result['flashcards']),
+        ),
+      );
+    } on ApiException catch (error) {
+      if (mounted && identity == _authIdentity) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted && identity == _authIdentity) {
+        setState(() => _flashcardsLoadingId = null);
+      }
+    }
+  }
+
+  Map<String, dynamic> _placementContext() {
+    final context = <String, dynamic>{};
+    void add(String key, TextEditingController controller) {
+      final value = controller.text.trim();
+      if (value.isNotEmpty) context[key] = value;
+    }
+
+    add('company', _companyController);
+    add('role', _targetRoleController);
+    add('salary', _salaryController);
+    add('current_skills', _currentSkillsController);
+    add('skills_to_improve', _skillsToImproveController);
+    add('preparation_level', _preparationLevelController);
+    add('application_timeline', _applicationTimelineController);
+    return context;
+  }
+
   Future<void> _researchPlacement() async {
-    if (_auth.user?.isStudent != true || _selectedMode != 'placement') return;
+    if (_auth.user?.isStudent != true ||
+        _selectedMode != 'placement' ||
+        _loading) {
+      return;
+    }
     final identity = _authIdentity;
     final goal = _careerGoalController.text.trim();
     if (goal.length < 2 || _placementResearchLoading) return;
     final jobDescription = _jobDescriptionController.text.trim();
     final allowExternalProcessing = _allowExternalProcessing;
+    final placementContext = _placementContext();
+    final api = AppScope.read(context).api;
     final requestId = ++_placementResearchRequestId;
     setState(() {
       _placementResearchLoading = true;
@@ -1016,8 +1524,20 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
       _placementResearchResult = null;
     });
     try {
-      final result = await AppScope.read(context).api.researchPlacement(
-        careerGoal: goal,
+      final roadmapCreated = await _sendMessage(
+        'Career goal: $goal',
+        placementContext: placementContext,
+      );
+      if (!roadmapCreated) return;
+      final researchGoal = [
+        goal,
+        if (_companyController.text.trim().isNotEmpty)
+          'Company: ${_companyController.text.trim()}',
+        if (_targetRoleController.text.trim().isNotEmpty)
+          'Role: ${_targetRoleController.text.trim()}',
+      ].join('. ');
+      final result = await api.researchPlacement(
+        careerGoal: researchGoal,
         jobDescription: jobDescription,
         allowExternalProcessing: allowExternalProcessing,
       );
@@ -1208,10 +1728,14 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
     if (size == null) {
       throw const ApiException('The selected file size could not be verified.');
     }
+    final path = file.path;
     return AssistantPickedDocument(
       name: file.name,
       size: size,
-      path: file.path,
+      path: path,
+      bytes: path == null && size <= _maxDocumentBytes
+          ? await file.readAsBytes()
+          : null,
     );
   }
 
@@ -1246,12 +1770,13 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
         throw const ApiException('Documents must be 5 MB or smaller.');
       }
       final path = selected.path;
-      if (path == null || path.isEmpty) {
+      final bytes = selected.bytes;
+      if ((path == null || path.isEmpty) && bytes == null) {
         throw const ApiException(
-          'This platform did not provide a local file path for upload.',
+          'This platform did not provide readable file data for upload.',
         );
       }
-      final actualSize = await File(path).length();
+      final actualSize = bytes?.length ?? await File(path!).length();
       if (!mounted || identity != _authIdentity) return;
       if (actualSize <= 0) {
         throw const ApiException('Choose a non-empty document.');
@@ -1260,7 +1785,9 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
         throw const ApiException('Documents must be 5 MB or smaller.');
       }
       if (placement) {
-        final result = await api.uploadPlacementDocument(path);
+        final result = bytes != null
+            ? await api.uploadPlacementDocumentBytes(bytes, selected.name)
+            : await api.uploadPlacementDocument(path!);
         if (!mounted || identity != _authIdentity) return;
         setState(() {
           _placementUploadMessage =
@@ -1270,8 +1797,14 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
           _placementAnalysisError = null;
         });
       } else {
-        await api.uploadStudyDocument(path);
+        final result = bytes != null
+            ? await api.uploadStudyDocumentBytes(bytes, selected.name)
+            : await api.uploadStudyDocument(path!);
         if (!mounted || identity != _authIdentity) return;
+        setState(
+          () => _studyDocumentId =
+              result['id']?.toString() ?? result['document_id']?.toString(),
+        );
         await _loadStudyDocuments();
       }
     } on ApiException catch (error) {
@@ -1292,13 +1825,18 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
           _studyUploadError = 'The selected file could not be read.';
         }
       });
-    } catch (_) {
+    } on PlatformException catch (error) {
       if (!mounted || identity != _authIdentity) return;
+      final message = error.message?.trim();
       setState(() {
         if (placement) {
-          _placementUploadError = 'The file could not be selected or uploaded.';
+          _placementUploadError = message == null || message.isEmpty
+              ? 'The file could not be selected or uploaded.'
+              : message;
         } else {
-          _studyUploadError = 'The file could not be selected or uploaded.';
+          _studyUploadError = message == null || message.isEmpty
+              ? 'The file could not be selected or uploaded.'
+              : message;
         }
       });
     } finally {
@@ -1395,15 +1933,103 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
         child: Card(
           margin: EdgeInsets.zero,
-          child: ListTile(
-            leading: const Icon(Icons.favorite_border),
-            title: const Text('Mood Detector'),
-            subtitle: const Text(
-              'Check in voluntarily. Private mood history is available in the Mood and wellbeing page and is not mixed into chat conversation history.',
-            ),
-            trailing: TextButton(
-              onPressed: _openMoodScreen,
-              child: const Text('Open check-in'),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Private mood check-in',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Voluntary and non-diagnostic. Your check-in is private and separate from assistant chat.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  key: const Key('assistant_mood_value'),
+                  initialValue: _selectedMood,
+                  decoration: const InputDecoration(
+                    labelText: 'How are you feeling?',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'very_low',
+                      child: Text('Very low'),
+                    ),
+                    DropdownMenuItem(value: 'low', child: Text('Low')),
+                    DropdownMenuItem(value: 'neutral', child: Text('Neutral')),
+                    DropdownMenuItem(value: 'good', child: Text('Good')),
+                    DropdownMenuItem(
+                      value: 'very_good',
+                      child: Text('Very good'),
+                    ),
+                  ],
+                  onChanged: _moodCheckInSubmitting
+                      ? null
+                      : (value) {
+                          if (value != null) {
+                            setState(() => _selectedMood = value);
+                          }
+                        },
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  key: const Key('assistant_mood_reflection'),
+                  controller: _moodReflectionController,
+                  maxLength: 2000,
+                  minLines: 1,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Optional private reflection',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: FilledButton.icon(
+                    key: const Key('assistant_mood_submit'),
+                    onPressed: _moodCheckInSubmitting
+                        ? null
+                        : _submitMoodCheckIn,
+                    icon: _moodCheckInSubmitting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.favorite_border),
+                    label: Text(
+                      _moodCheckInSubmitting
+                          ? 'Saving check-in…'
+                          : 'Save private check-in',
+                    ),
+                  ),
+                ),
+                if (_moodCheckInError != null)
+                  Text(
+                    _moodCheckInError!,
+                    style: TextStyle(color: scheme.error),
+                  ),
+                if (_moodCheckInMessage != null) Text(_moodCheckInMessage!),
+                if (_moodCheckInLoading) const LinearProgressIndicator(),
+                if (_moodCheckIns.isNotEmpty)
+                  Text(
+                    'Most recent check-in: '
+                    '${_moodCheckIns.first['mood'] ?? 'Recorded'}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: TextButton(
+                    onPressed: _openMoodScreen,
+                    child: const Text('View private check-in history'),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -1435,8 +2061,8 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
                     const SizedBox(height: 4),
                     Text(
                       isPlacement
-                          ? 'The mode is included in chat requests; replies follow current server behavior. Placement practice is available; research results appear only when returned by the service.'
-                          : 'The mode is included in chat requests; replies follow current server behavior. Private saved study documents and service-generated quizzes appear here.',
+                          ? 'Share your target company, role, package, skills and timeline for a tailored roadmap. Research is optional and requires your consent.'
+                          : 'Ask questions about uploaded material, explore topic summaries, and generate practice quizzes and flashcards.',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(height: 10),
@@ -1470,6 +2096,69 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
             border: OutlineInputBorder(),
           ),
           onChanged: (_) => setState(() {}),
+        ),
+        TextField(
+          key: const Key('placement_company'),
+          controller: _companyController,
+          maxLength: 120,
+          decoration: const InputDecoration(
+            labelText: 'Dream company',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        TextField(
+          key: const Key('placement_role'),
+          controller: _targetRoleController,
+          maxLength: 120,
+          decoration: const InputDecoration(
+            labelText: 'Target role',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        TextField(
+          key: const Key('placement_salary'),
+          controller: _salaryController,
+          maxLength: 80,
+          decoration: const InputDecoration(
+            labelText: 'Package or salary goal',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        TextField(
+          key: const Key('placement_current_skills'),
+          controller: _currentSkillsController,
+          maxLength: 500,
+          decoration: const InputDecoration(
+            labelText: 'Current skills',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        TextField(
+          key: const Key('placement_skills_to_improve'),
+          controller: _skillsToImproveController,
+          maxLength: 500,
+          decoration: const InputDecoration(
+            labelText: 'Skills to improve',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        TextField(
+          key: const Key('placement_preparation_level'),
+          controller: _preparationLevelController,
+          maxLength: 120,
+          decoration: const InputDecoration(
+            labelText: 'Preparation level',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        TextField(
+          key: const Key('placement_application_timeline'),
+          controller: _applicationTimelineController,
+          maxLength: 120,
+          decoration: const InputDecoration(
+            labelText: 'Application timeline',
+            border: OutlineInputBorder(),
+          ),
         ),
         TextField(
           key: const Key('placement_job_description'),
@@ -1676,7 +2365,7 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
           ),
         ),
         Text(
-          'Supported: PDF, DOCX, TXT; maximum 5 MB. Documents stay private and are not added to chat.',
+          'Supported: PDF, DOCX, TXT; maximum 5 MB. Selected material is kept private and used only when you ask Study Buddy about it.',
           style: Theme.of(context).textTheme.bodySmall,
         ),
         if (_studyUploadError != null)
@@ -1703,42 +2392,83 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
             _studyDocumentsError == null &&
             _studyDocuments.isEmpty)
           const Text('No study documents yet.'),
+        if (_studyDocuments.isNotEmpty)
+          DropdownButton<String>(
+            key: const Key('study_document_selector'),
+            isExpanded: true,
+            value: _studyDocumentId,
+            hint: const Text('Choose material for this conversation'),
+            items: _studyDocuments
+                .map(
+                  (document) => DropdownMenuItem(
+                    value: document['id']?.toString(),
+                    child: Text(
+                      document['filename']?.toString() ?? 'Study document',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) => setState(() => _studyDocumentId = value),
+          ),
         ..._studyDocuments.map((document) {
           final id = document['id']?.toString() ?? '';
-          return ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: Text(document['filename']?.toString() ?? 'Study document'),
-            subtitle: Text(document['summary']?.toString() ?? ''),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  tooltip:
-                      'Analyse ${document['filename'] ?? 'study document'}',
-                  onPressed: () => _analyzeStudyDocument(document),
-                  icon: const Icon(Icons.analytics_outlined),
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  document['filename']?.toString() ?? 'Study document',
                 ),
-                IconButton(
-                  tooltip:
-                      'Generate quiz for ${document['filename'] ?? 'study document'}',
-                  onPressed: _quizLoadingId == id
-                      ? null
-                      : () => _generateStudyQuiz(document),
-                  icon: _quizLoadingId == id
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.quiz_outlined),
-                ),
-                IconButton(
-                  tooltip: 'Delete ${document['filename'] ?? 'study document'}',
-                  onPressed: () => _deleteStudyDocument(document),
-                  icon: const Icon(Icons.delete_outline),
-                ),
-              ],
-            ),
+                subtitle: Text(document['summary']?.toString() ?? ''),
+                selected: _studyDocumentId == id,
+                onTap: () => setState(() => _studyDocumentId = id),
+              ),
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: [
+                  TextButton.icon(
+                    onPressed: () => _analyzeStudyDocument(document),
+                    icon: const Icon(Icons.analytics_outlined),
+                    label: const Text('Analyse'),
+                  ),
+                  TextButton.icon(
+                    onPressed: _quizLoadingId == id
+                        ? null
+                        : () => _generateStudyQuiz(document),
+                    icon: _quizLoadingId == id
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.quiz_outlined),
+                    label: const Text('Practice quiz'),
+                  ),
+                  TextButton.icon(
+                    onPressed: _flashcardsLoadingId == id
+                        ? null
+                        : () => _generateStudyFlashcards(document),
+                    icon: _flashcardsLoadingId == id
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.style_outlined),
+                    label: const Text('Flashcards'),
+                  ),
+                  IconButton(
+                    tooltip:
+                        'Delete ${document['filename'] ?? 'study document'}',
+                    onPressed: () => _deleteStudyDocument(document),
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                ],
+              ),
+            ],
           );
         }),
       ],
@@ -1878,6 +2608,25 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
                 children: [
                   _buildModePicker(isStudent, scheme),
                   _buildModeNotice(scheme),
+                  if (_conversationError != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                      child: Card(
+                        margin: EdgeInsets.zero,
+                        child: ListTile(
+                          leading: Icon(
+                            Icons.history_toggle_off,
+                            color: scheme.error,
+                          ),
+                          title: const Text('Conversation history unavailable'),
+                          subtitle: Text(_conversationError!),
+                          trailing: TextButton(
+                            onPressed: _loadConversations,
+                            child: const Text('Retry'),
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1892,10 +2641,10 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              itemCount: _suggestedQuestions.length,
+              itemCount: _suggestionsForMode().length,
               separatorBuilder: (_, _) => const SizedBox(width: 8),
               itemBuilder: (context, index) {
-                final question = _suggestedQuestions[index];
+                final question = _suggestionsForMode()[index];
                 return ActionChip(
                   label: Text(
                     question,
@@ -2064,6 +2813,30 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
                     msg.text,
                     style: TextStyle(color: fg, fontSize: 14.5, height: 1.4),
                   ),
+                  if (msg.sources.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Sources: ${msg.sources.join(' · ')}',
+                      style: theme.textTheme.bodySmall?.copyWith(color: fg),
+                    ),
+                  ],
+                  if (msg.suggestions.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: msg.suggestions
+                          .map(
+                            (suggestion) => ActionChip(
+                              label: Text(suggestion),
+                              onPressed: _loading
+                                  ? null
+                                  : () => _sendMessage(suggestion),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ],
                   if (msg.requiresConfirmation &&
                       msg.confirmationId != null) ...[
                     const SizedBox(height: 8),
@@ -2080,6 +2853,41 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
                       ],
                     ),
                   ],
+                  if (!isUser)
+                    Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: Wrap(
+                        spacing: 4,
+                        children: [
+                          if (msg.retryQuery != null)
+                            TextButton.icon(
+                              onPressed: _loading
+                                  ? null
+                                  : () => _retryMessage(msg),
+                              icon: const Icon(Icons.refresh, size: 16),
+                              label: const Text('Try again'),
+                            ),
+                          IconButton(
+                            tooltip: 'Copy response',
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () async {
+                              await Clipboard.setData(
+                                ClipboardData(text: msg.text),
+                              );
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Response copied.'),
+                                    duration: Duration(seconds: 1),
+                                  ),
+                                );
+                              }
+                            },
+                            icon: const Icon(Icons.copy, size: 18),
+                          ),
+                        ],
+                      ),
+                    ),
                   if (msg.intent != null) ...[
                     const SizedBox(height: 6),
                     Row(

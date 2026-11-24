@@ -4,6 +4,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from services.lost_found_matching import analyze_lost_found_image
+from routes.lost_found_workflow import router as workflow_router
 
 import os
 
@@ -32,3 +33,6 @@ def analyze_report_image(
 
     result = analyze_lost_found_image(data.image_base64, data.image_mime_type)
     return result
+
+
+router.include_router(workflow_router)

@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from bson import ObjectId
+from bson.errors import InvalidId
 from pymongo.errors import DuplicateKeyError
 
 from database import attendance_collection, notifications_collection, students_collection
@@ -124,41 +125,102 @@ def check_weekly_low_attendance(
     }
 
 
-def get_student_notifications(student_id: str) -> list[dict[str, Any]]:
-    """Returns in-app notifications for a student, newest first."""
+def _notification_output(document: dict[str, Any]) -> dict[str, Any]:
+    is_lost_found = (
+        document.get("action_type") == "lost_found_claim"
+        or document.get("warning_type") == "lost_found_match"
+    )
+    return {
+        "id": str(document["_id"]),
+        "student_id": document.get("student_id", ""),
+        "subject_code": document.get("subject_code", ""),
+        "subject_name": document.get("subject_name", ""),
+        "attendance_percentage": document.get("attendance_percentage", 0.0),
+        "threshold": document.get("threshold", DEFAULT_ATTENDANCE_THRESHOLD),
+        "week_id": document.get("week_id", ""),
+        "warning_type": document.get("warning_type", "low_attendance"),
+        "title": document.get("title", "Attendance Alert"),
+        "message": document.get("message", ""),
+        "reporting_date": document.get("reporting_date", ""),
+        "created_at": (
+            document.get("created_at").isoformat()
+            if isinstance(document.get("created_at"), datetime)
+            else None
+        ),
+        "is_read": bool(document.get("is_read", False)),
+        "action_type": "lost_found_claim" if is_lost_found else None,
+        "claim_id": (
+            str(document["claim_id"]) if document.get("claim_id") is not None else None
+        ),
+        "match_id": (
+            str(document["match_id"]) if document.get("match_id") is not None else None
+        ),
+        "lost_report_id": (
+            str(document["lost_report_id"])
+            if document.get("lost_report_id") is not None
+            else None
+        ),
+        "found_report_id": (
+            str(document["found_report_id"])
+            if document.get("found_report_id") is not None
+            else None
+        ),
+    }
+
+
+def _get_notifications(query: dict[str, Any]) -> list[dict[str, Any]]:
     docs = list(
-        notifications_collection.find({"student_id": student_id})
+        notifications_collection.find(query)
         .sort("created_at", -1)
         .limit(100)
     )
-    result = []
-    for d in docs:
-        result.append({
-            "id": str(d["_id"]),
-            "student_id": d["student_id"],
-            "subject_code": d.get("subject_code", ""),
-            "subject_name": d.get("subject_name", ""),
-            "attendance_percentage": d.get("attendance_percentage", 0.0),
-            "threshold": d.get("threshold", DEFAULT_ATTENDANCE_THRESHOLD),
-            "week_id": d.get("week_id", ""),
-            "warning_type": d.get("warning_type", "low_attendance"),
-            "title": d.get("title", "Attendance Alert"),
-            "message": d.get("message", ""),
-            "reporting_date": d.get("reporting_date", ""),
-            "created_at": d.get("created_at").isoformat() if isinstance(d.get("created_at"), datetime) else None,
-            "is_read": bool(d.get("is_read", False)),
-        })
-    return result
+    return [_notification_output(document) for document in docs]
+
+
+def get_student_notifications(student_id: str) -> list[dict[str, Any]]:
+    """Returns in-app notifications for a student, newest first."""
+    return _get_notifications({"student_id": student_id})
+
+
+def get_user_notifications(
+    student_id: str | None,
+    user_id: Any,
+) -> list[dict[str, Any]]:
+    """Returns notifications addressed to this user or linked student."""
+    owners = [{"recipient_user_id": user_id}]
+    if student_id:
+        owners.append({"student_id": student_id})
+    return _get_notifications({"$or": owners})
 
 
 def mark_notification_read(student_id: str, notification_id: str) -> bool:
     """Marks a student's notification as read."""
     try:
         oid = ObjectId(notification_id)
-    except Exception:
+    except InvalidId:
         return False
     res = notifications_collection.update_one(
         {"_id": oid, "student_id": student_id},
+        {"$set": {"is_read": True}},
+    )
+    return res.modified_count > 0
+
+
+def mark_user_notification_read(
+    student_id: str | None,
+    user_id: Any,
+    notification_id: str,
+) -> bool:
+    """Marks a notification read only when addressed to this user or student."""
+    try:
+        oid = ObjectId(notification_id)
+    except InvalidId:
+        return False
+    owners = [{"recipient_user_id": user_id}]
+    if student_id:
+        owners.append({"student_id": student_id})
+    res = notifications_collection.update_one(
+        {"_id": oid, "$or": owners},
         {"$set": {"is_read": True}},
     )
     return res.modified_count > 0

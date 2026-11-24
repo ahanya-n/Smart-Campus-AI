@@ -42,10 +42,12 @@ and role management, student linking, and academic interventions.
 
 Academic Intelligence provides explainable, rule-based attendance and academic
 indicators; it is not a trained predictive model. The campus assistant has
-record-grounded chat, timetable/free-time support, study and placement tools,
-and optional external AI-provider adapters. Assistant document, mood
-check-in/analytics, and lost-and-found workflows are implemented in the source;
-availability varies by client and configuration.
+record-grounded general chat, placement preparation, Study Buddy document
+tools, and private mood check-ins, alongside timetable/free-time support and
+optional external AI-provider adapters. Flutter's assistant uses the FastAPI
+conversation mode, placement-context, study-document, and mood APIs.
+Lost-and-found workflows are available to students and administrators; the
+Flutter app exposes a direct role-aware navigation destination.
 
 ## Folder structure
 
@@ -122,8 +124,13 @@ starting it:
 ```powershell
 Set-Location .\backend
 Copy-Item .env.example .env
-..\.venv\Scripts\python.exe -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+..\.venv\Scripts\python.exe -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+The FastAPI API is available at `http://127.0.0.1:8000` on this computer.
+Binding to `0.0.0.0` also permits a phone on the same trusted Wi-Fi to connect;
+allow inbound TCP port 8000 through Windows Firewall only as needed. The API
+uses the local `MONGO_URL` and `MONGO_DB_NAME` from `backend/.env`.
 
 For optional PDF study-document extraction, install the additional dependency
 from the backend environment with
@@ -191,10 +198,27 @@ Run the FastAPI service with the local environment described above, then:
 ```powershell
 Set-Location .\mobile_app
 flutter pub get
-flutter run
 ```
 
-The mobile API URL can be overridden with `--dart-define=API_BASE_URL=http://<host>:8000`. For the Android emulator, the default is `http://10.0.2.2:8000`.
+Run on Chrome or Windows desktop using `http://127.0.0.1:8000` by default:
+
+```powershell
+flutter run -d chrome
+# or
+flutter run -d windows
+```
+
+Android Emulator defaults to `http://10.0.2.2:8000`. A physical Android device
+must use the computer's LAN IP and the FastAPI server must be reachable on that
+network:
+
+```powershell
+flutter run -d <device-id> --dart-define=API_BASE_URL=http://<COMPUTER_LAN_IP>:8000
+```
+
+The Android cleartext exception is present only in the debug manifest; release
+builds retain Android's HTTPS-only default. FastAPI allows CORS only from local
+HTTP loopback origins needed by Flutter Web's development server.
 
 ## Environment variable names
 
@@ -228,8 +252,9 @@ The Express API is mounted at `/api`:
 
 The FastAPI service also exposes authentication, student, attendance,
 timetable, notifications, assistant and assistant-document/mood workflows,
-academic intelligence, library, transport, complaints, and lost-and-found
-routes for supported clients. Student-directory requests require
+academic intelligence, library, transport, complaints, and the complete
+student Lost and Found reporting/matching workflow for supported clients.
+Student-directory requests require
 authentication; student-role users receive only their own linked student
 record, while staff roles retain directory access.
 
@@ -258,6 +283,28 @@ Library catalog and borrowing requests require authentication. Students and facu
 Transport routes use the existing `transport_routes` collection. Route records hold bus and registration numbers, pickup/drop points, driver details, capacity, and embedded student assignments. Authenticated users can view routes; only administrators can create, edit, delete, or assign students. Students can view only their own transport assignment. Driver contact details and assigned student rosters are restricted to administrators. Route assignments require an existing student record and a seat, and routes with assignments cannot be deleted or reduced below their assignment count. Express serves React at `/api/transport`; FastAPI serves Flutter at `/transport`. No bus or student assignments are seeded automatically.
 
 Students can redeem an admin-issued one-time link code from the React Profile page or the Flutter Profile screen. The web client uses `/auth/me/link-student` through Express; Flutter uses `/me/link-student` on FastAPI.
+
+Lost and Found is available to students and administrators in Flutter and React.
+Students can submit lost/found reports, optionally attach JPEG/PNG/WebP images
+(maximum 5 MB), review AI category/colour suggestions, view potential matches,
+and request review. Owners can review incoming requests and close or resolve
+their own reports; administrators can review incoming requests. Matching
+requires opposite report types within 24 hours and hides
+exact locations and descriptions from match previews. AI suggestions and
+similarity scores are experimental and never establish ownership. FastAPI
+stores uploaded images in the Express upload directory by default; set
+`LOST_FOUND_UPLOAD_DIR` and `LOST_FOUND_EMBEDDING_DIR` consistently if the
+services use different storage locations.
+
+FastAPI Lost and Found endpoints are mounted under `/lost-found`: `POST /`
+creates a report, `GET /my-reports` lists the signed-in user's reports,
+`GET /{report_id}` returns an owner/admin report, `GET /{report_id}/matches`
+returns privacy-filtered potential matches, `POST /matches/{match_id}/request`
+submits a review request, `GET /claims/incoming` and
+`PATCH /matches/{match_id}/claims/{claim_id}/review` manage incoming requests,
+and `PATCH /{report_id}/ai-suggestions`, `/close`, and `/resolve` update an
+owned report. Image endpoints require authentication and enforce report or
+match participation.
 
 ## Tests and checks
 
@@ -310,6 +357,9 @@ FastAPI integration tests use `smart_campus_test` and create test users/student 
 - Events are not backed by a campus API; any event preview is not a live events
   workflow. Some mobile feature previews may be less complete than the web
   portal and APIs.
+- Flutter complaints currently provide student self-service. The web portal's
+  administrator complaint queue and case-management actions are not yet
+  available in Flutter.
 - The FastAPI base runtime dependencies are not yet captured in a complete
   requirements manifest; only the optional PDF dependency has a requirements
   file.

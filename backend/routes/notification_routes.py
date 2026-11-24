@@ -1,18 +1,16 @@
 """Weekly Attendance Warning and Notification APIs.
 """
 
-from typing import Any
-
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from dependencies.auth import get_current_user, require_roles
 from dependencies.student import find_linked_student
 from services.attendance_warning_service import (
     DEFAULT_ATTENDANCE_THRESHOLD,
     check_weekly_low_attendance,
-    get_student_notifications,
-    mark_notification_read,
+    get_user_notifications,
+    mark_user_notification_read,
 )
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
@@ -33,6 +31,11 @@ class NotificationItem(BaseModel):
     reporting_date: str
     created_at: str | None
     is_read: bool
+    action_type: str | None = None
+    claim_id: str | None = None
+    match_id: str | None = None
+    lost_report_id: str | None = None
+    found_report_id: str | None = None
 
 
 class NotificationListResponse(BaseModel):
@@ -58,22 +61,20 @@ def list_notifications(current_user: dict = Depends(get_current_user)):
     Never trusts a client-supplied student_id; derives it from the auth token.
     """
     student = find_linked_student(current_user)
-    if not student:
-        return NotificationListResponse(
-            linked=False,
-            student_id=None,
-            unread_count=0,
-            notifications=[],
-        )
-
-    sid = student["student_id"]
-    items = get_student_notifications(sid)
+    sid = (
+        student["student_id"]
+        if student
+        else current_user.get("student_id")
+        if isinstance(current_user.get("student_id"), str)
+        else None
+    )
+    items = get_user_notifications(sid, current_user["_id"])
     parsed = [NotificationItem(**item) for item in items]
     unread = sum(1 for n in parsed if not n.is_read)
 
     return NotificationListResponse(
-        linked=True,
-        student_id=sid,
+        linked=bool(student),
+        student_id=sid if student else None,
         unread_count=unread,
         notifications=parsed,
     )
@@ -100,10 +101,18 @@ def mark_read(
 ):
     """Marks a notification as read for the logged-in student."""
     student = find_linked_student(current_user)
-    if not student:
-        raise HTTPException(status_code=403, detail="Account is not linked to a student record")
-
-    success = mark_notification_read(student["student_id"], notification_id)
+    student_id = (
+        student["student_id"]
+        if student
+        else current_user.get("student_id")
+        if isinstance(current_user.get("student_id"), str)
+        else None
+    )
+    success = mark_user_notification_read(
+        student_id,
+        current_user["_id"],
+        notification_id,
+    )
     if not success:
         raise HTTPException(status_code=404, detail="Notification not found")
     return {"message": "Notification marked as read", "id": notification_id}

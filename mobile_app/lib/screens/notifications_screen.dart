@@ -4,6 +4,7 @@ import '../app_scope.dart';
 import '../models/notification_item.dart';
 import '../services/api_service.dart';
 import '../widgets/state_views.dart';
+import 'lost_found_screen.dart';
 
 /// Screen displaying weekly low attendance alerts and notices.
 class NotificationsScreen extends StatefulWidget {
@@ -72,6 +73,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             reportingDate: item.reportingDate,
             createdAt: item.createdAt,
             isRead: true,
+            actionType: item.actionType,
+            claimId: item.claimId,
+            matchId: item.matchId,
+            lostReportId: item.lostReportId,
+            foundReportId: item.foundReportId,
           );
         }
       });
@@ -80,11 +86,19 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
   }
 
+  Future<void> _openNotification(NotificationItem item) async {
+    await _markRead(item);
+    if (!mounted || item.actionType != 'lost_found_claim') return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const LostFoundScreen()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Attendance Notices'),
+        title: const Text('Notifications'),
         actions: [
           IconButton(
             tooltip: 'Refresh',
@@ -98,13 +112,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           : _error != null
               ? MessageView(
                   icon: Icons.error_outline_rounded,
-                  title: 'Could not load notices',
+                  title: 'Could not load notifications',
                   message: _error!,
                   actionLabel: 'Try again',
                   onAction: _load,
                   isError: true,
                 )
-              : !_linked
+              : !_linked && _notifications.isEmpty
                   ? const MessageView(
                       icon: Icons.link_off_rounded,
                       title: 'Account Not Linked',
@@ -114,9 +128,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   : _notifications.isEmpty
                       ? const MessageView(
                           icon: Icons.verified_rounded,
-                          title: 'All Attendance Healthy',
+                          title: 'No Notifications',
                           message:
-                            'No low attendance warnings for your account. Keep your attendance at 75% or above!',
+                              'There are no attendance warnings or campus service notifications for your account.',
                         )
                       : RefreshIndicator(
                           onRefresh: _load,
@@ -129,7 +143,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                               final notif = _notifications[index];
                               return _WarningCard(
                                 notif: notif,
-                                onTap: () => _markRead(notif),
+                                onTap: () => _openNotification(notif),
                               );
                             },
                           ),
@@ -177,8 +191,12 @@ class _WarningCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
-                      Icons.warning_amber_rounded,
-                      color: Colors.red.shade700,
+                      notif.actionType == 'lost_found_claim'
+                          ? Icons.find_in_page_outlined
+                          : Icons.warning_amber_rounded,
+                      color: notif.actionType == 'lost_found_claim'
+                          ? scheme.primary
+                          : Colors.red.shade700,
                       size: 24,
                     ),
                   ),
@@ -237,7 +255,16 @@ class _WarningCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 14),
-              Row(
+              if (notif.actionType == 'lost_found_claim')
+                Text(
+                  'Open Lost and Found to review this request.',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                )
+              else
+                Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Container(

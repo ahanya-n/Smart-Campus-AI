@@ -38,9 +38,10 @@ class ApiService {
   ApiService({
     required this._tokenStorage,
     http.Client? client,
-    this.baseUrl = ApiConfig.baseUrl,
+    String? baseUrl,
     this.timeout = ApiConfig.timeout,
-  }) : _client = client ?? http.Client();
+  }) : baseUrl = baseUrl ?? ApiConfig.baseUrl,
+       _client = client ?? http.Client();
 
   final TokenStorage _tokenStorage;
   final http.Client _client;
@@ -220,6 +221,211 @@ class ApiService {
       throw const ApiException('Unexpected complaint response from server.');
     }
     return CampusComplaint.fromJson(data);
+  }
+
+  /// GET /lost-found/my-reports — reports owned by the signed-in user.
+  Future<List<Map<String, dynamic>>> getLostFoundReports({
+    String? reportType,
+    String? status,
+  }) async {
+    final parameters = <String, String>{
+      'report_type': ?reportType,
+      'status': ?status,
+    };
+    final path = parameters.isEmpty
+        ? '/lost-found/my-reports'
+        : '/lost-found/my-reports?${Uri(queryParameters: parameters).query}';
+    final data = await _request('GET', path, auth: _Auth.required);
+    if (data is! Map || data['items'] is! List) {
+      throw const ApiException('Unexpected Lost and Found reports response.');
+    }
+    return (data['items'] as List)
+        .whereType<Map>()
+        .map(
+          (item) => item.map((key, value) => MapEntry(key.toString(), value)),
+        )
+        .toList();
+  }
+
+  /// POST /lost-found — creates a lost or found report.
+  Future<Map<String, dynamic>> createLostFoundReport(
+    Map<String, dynamic> report,
+  ) async {
+    final data = await _request(
+      'POST',
+      '/lost-found/',
+      body: report,
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected Lost and Found report response.');
+    }
+    return data;
+  }
+
+  /// GET /lost-found/{id}.
+  Future<Map<String, dynamic>> getLostFoundReport(String reportId) async {
+    final data = await _request(
+      'GET',
+      '/lost-found/${Uri.encodeComponent(reportId)}',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected Lost and Found report response.');
+    }
+    return data;
+  }
+
+  /// GET /lost-found/{id}/matches.
+  Future<Map<String, dynamic>> getLostFoundMatches(String reportId) async {
+    final data = await _request(
+      'GET',
+      '/lost-found/${Uri.encodeComponent(reportId)}/matches',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected Lost and Found matches response.');
+    }
+    return data;
+  }
+
+  /// GET /lost-found/images or /lost-found/matches/{id}/image.
+  ///
+  /// Express image URLs include an `/api` prefix; FastAPI uses the same
+  /// storage but exposes the equivalent route without that prefix.
+  Future<Uint8List> getLostFoundImage(String imageUrl) async {
+    final token = await _tokenStorage.readToken();
+    if (token == null || token.isEmpty) {
+      throw const ApiException('You are not signed in.', statusCode: 401);
+    }
+    final path = imageUrl.startsWith('/api/lost-found/')
+        ? imageUrl.substring(4)
+        : imageUrl;
+    final uri = Uri.parse('$baseUrl$path');
+    final request = http.Request('GET', uri)
+      ..headers.addAll({'Accept': 'image/*', 'Authorization': 'Bearer $token'});
+    if (kDebugMode) debugPrint('[api] -> GET $uri');
+
+    final http.Response response;
+    try {
+      final streamed = await _client.send(request).timeout(timeout);
+      response = await http.Response.fromStream(streamed).timeout(timeout);
+    } on TimeoutException {
+      throw const ApiException(
+        'The server took too long to respond. Please try again.',
+      );
+    } on SocketException {
+      throw ApiException(_unreachableMessage);
+    } on http.ClientException {
+      throw ApiException(_unreachableMessage);
+    }
+
+    if (kDebugMode) debugPrint('[api] <- GET $uri HTTP ${response.statusCode}');
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return response.bodyBytes;
+    }
+    dynamic decoded;
+    if (response.bodyBytes.isNotEmpty) {
+      try {
+        decoded = jsonDecode(utf8.decode(response.bodyBytes));
+      } on FormatException {
+        decoded = null;
+      }
+    }
+    throw ApiException(
+      _errorMessage(response.statusCode, decoded),
+      statusCode: response.statusCode,
+    );
+  }
+
+  /// POST /lost-found/matches/{id}/request.
+  Future<Map<String, dynamic>> requestLostFoundMatch(String matchId) async {
+    final data = await _request(
+      'POST',
+      '/lost-found/matches/${Uri.encodeComponent(matchId)}/request',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected Lost and Found request response.');
+    }
+    return data;
+  }
+
+  /// GET /lost-found/claims/incoming.
+  Future<List<Map<String, dynamic>>> getIncomingLostFoundClaims() async {
+    final data = await _request(
+      'GET',
+      '/lost-found/claims/incoming',
+      auth: _Auth.required,
+    );
+    if (data is! Map || data['items'] is! List) {
+      throw const ApiException('Unexpected Lost and Found claims response.');
+    }
+    return (data['items'] as List)
+        .whereType<Map>()
+        .map(
+          (item) => item.map((key, value) => MapEntry(key.toString(), value)),
+        )
+        .toList();
+  }
+
+  /// PATCH /lost-found/matches/{matchId}/claims/{claimId}/review.
+  Future<Map<String, dynamic>> reviewLostFoundClaim({
+    required String matchId,
+    required String claimId,
+    required String decision,
+  }) async {
+    final data = await _request(
+      'PATCH',
+      '/lost-found/matches/${Uri.encodeComponent(matchId)}/claims/'
+          '${Uri.encodeComponent(claimId)}/review',
+      body: {'decision': decision},
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected Lost and Found review response.');
+    }
+    return data;
+  }
+
+  /// PATCH /lost-found/{id}/ai-suggestions.
+  Future<Map<String, dynamic>> applyLostFoundSuggestions({
+    required String reportId,
+    String? category,
+    String? colour,
+  }) async {
+    final body = <String, dynamic>{'category': ?category, 'colour': ?colour};
+    final data = await _request(
+      'PATCH',
+      '/lost-found/${Uri.encodeComponent(reportId)}/ai-suggestions',
+      body: body,
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException(
+        'Unexpected Lost and Found suggestion response.',
+      );
+    }
+    return data;
+  }
+
+  /// PATCH /lost-found/{id}/close or /resolve.
+  Future<Map<String, dynamic>> updateLostFoundStatus({
+    required String reportId,
+    required String status,
+  }) async {
+    if (status != 'close' && status != 'resolve') {
+      throw ArgumentError.value(status, 'status', 'Must be close or resolve.');
+    }
+    final data = await _request(
+      'PATCH',
+      '/lost-found/${Uri.encodeComponent(reportId)}/$status',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Unexpected Lost and Found status response.');
+    }
+    return data;
   }
 
   /// POST /library/books — administrators only.
@@ -409,10 +615,12 @@ class ApiService {
     return data;
   }
 
-  Future<List<Map<String, dynamic>>> listAssistantConversations() async {
+  Future<List<Map<String, dynamic>>> listAssistantConversations({
+    String mode = 'general',
+  }) async {
     final data = await _request(
       'GET',
-      '/assistant/conversations',
+      '/assistant/conversations?${Uri(queryParameters: {'mode': mode}).query}',
       auth: _Auth.required,
     );
     if (data is! List) {
@@ -426,10 +634,12 @@ class ApiService {
         .toList();
   }
 
-  Future<Map<String, dynamic>> createAssistantConversation() async {
+  Future<Map<String, dynamic>> createAssistantConversation({
+    String mode = 'general',
+  }) async {
     final data = await _request(
       'POST',
-      '/assistant/conversations',
+      '/assistant/conversations?${Uri(queryParameters: {'mode': mode}).query}',
       auth: _Auth.required,
     );
     if (data is! Map<String, dynamic>) {
@@ -699,6 +909,7 @@ class ApiService {
     List<Map<String, dynamic>> history = const [],
     String? conversationId,
     String? documentId,
+    Map<String, dynamic>? placementContext,
   }) async {
     final body = <String, dynamic>{'message': message, 'mode': mode};
     if (day != null) body['day'] = day;
@@ -708,6 +919,9 @@ class ApiService {
     }
     if (documentId != null && documentId.isNotEmpty) {
       body['document_id'] = documentId;
+    }
+    if (placementContext != null && placementContext.isNotEmpty) {
+      body['placement_context'] = placementContext;
     }
     final data = await _request(
       'POST',
@@ -721,11 +935,18 @@ class ApiService {
     return data;
   }
 
-  Future<Map<String, dynamic>> createMoodCheckIn(String mood) async {
+  Future<Map<String, dynamic>> createMoodCheckIn(
+    String mood, {
+    String? reflection,
+  }) async {
     final data = await _request(
       'POST',
       '/assistant/mood/check-ins',
-      body: {'mood': mood},
+      body: {
+        'mood': mood,
+        if (reflection != null && reflection.trim().isNotEmpty)
+          'reflection': reflection.trim(),
+      },
       auth: _Auth.required,
     );
     if (data is! Map<String, dynamic>) {
@@ -789,7 +1010,19 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> uploadStudyDocument(String filePath) =>
-      _uploadAssistantDocument('/assistant/study/documents', filePath);
+      _uploadAssistantDocument(
+        '/assistant/study/documents',
+        filePath: filePath,
+      );
+
+  Future<Map<String, dynamic>> uploadStudyDocumentBytes(
+    Uint8List bytes,
+    String filename,
+  ) => _uploadAssistantDocument(
+    '/assistant/study/documents',
+    bytes: bytes,
+    filename: filename,
+  );
 
   Future<Map<String, dynamic>> createStudyQuiz(String documentId) async {
     final data = await _request(
@@ -799,6 +1032,18 @@ class ApiService {
     );
     if (data is! Map<String, dynamic> || data['questions'] is! List) {
       throw const ApiException('Unexpected study quiz response.');
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> createStudyFlashcards(String documentId) async {
+    final data = await _request(
+      'POST',
+      '/assistant/study/documents/${Uri.encodeComponent(documentId)}/flashcards',
+      auth: _Auth.required,
+    );
+    if (data is! Map<String, dynamic> || data['flashcards'] is! List) {
+      throw const ApiException('Unexpected study flashcards response.');
     }
     return data;
   }
@@ -838,7 +1083,19 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> uploadPlacementDocument(String filePath) =>
-      _uploadAssistantDocument('/assistant/placement/documents', filePath);
+      _uploadAssistantDocument(
+        '/assistant/placement/documents',
+        filePath: filePath,
+      );
+
+  Future<Map<String, dynamic>> uploadPlacementDocumentBytes(
+    Uint8List bytes,
+    String filename,
+  ) => _uploadAssistantDocument(
+    '/assistant/placement/documents',
+    bytes: bytes,
+    filename: filename,
+  );
 
   Future<List<Map<String, dynamic>>> getPlacementDocuments() async {
     final data = await _request(
@@ -897,21 +1154,29 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> _uploadAssistantDocument(
-    String path,
-    String filePath,
-  ) async {
-    final filename = filePath.replaceAll('\\', '/').split('/').last;
-    final extension = filename.contains('.')
-        ? filename.split('.').last.toLowerCase()
+    String path, {
+    String? filePath,
+    Uint8List? bytes,
+    String? filename,
+  }) async {
+    final resolvedFilename =
+        filename ?? filePath?.replaceAll('\\', '/').split('/').last ?? '';
+    final extension = resolvedFilename.contains('.')
+        ? resolvedFilename.split('.').last.toLowerCase()
         : '';
     if (!const {'pdf', 'docx', 'txt'}.contains(extension)) {
       throw const ApiException('Choose a PDF, DOCX, or TXT file.');
     }
-    final file = File(filePath);
     final int length;
-    try {
-      length = await file.length();
-    } on FileSystemException {
+    if (bytes != null) {
+      length = bytes.length;
+    } else if (filePath != null && filePath.isNotEmpty) {
+      try {
+        length = await File(filePath).length();
+      } on FileSystemException {
+        throw const ApiException('The selected file could not be read.');
+      }
+    } else {
       throw const ApiException('The selected file could not be read.');
     }
     if (length <= 0) {
@@ -933,10 +1198,16 @@ class ApiService {
         'Accept': 'application/json',
         'Authorization': 'Bearer $token',
       });
-    try {
-      request.files.add(await http.MultipartFile.fromPath('file', filePath));
-    } on FileSystemException {
-      throw const ApiException('The selected file could not be read.');
+    if (bytes != null) {
+      request.files.add(
+        http.MultipartFile.fromBytes('file', bytes, filename: resolvedFilename),
+      );
+    } else {
+      try {
+        request.files.add(await http.MultipartFile.fromPath('file', filePath!));
+      } on FileSystemException {
+        throw const ApiException('The selected file could not be read.');
+      }
     }
     final data = await _sendRequest(request, 'POST', uri);
     if (data is! Map<String, dynamic>) {

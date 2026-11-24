@@ -1,7 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -52,6 +55,7 @@ MockClient _fakeBackend({
   List<Map<String, dynamic>>? complaintsSeed,
   List<Map<String, dynamic>>? conversationsSeed,
   List<Map<String, dynamic>>? studyDocumentsSeed,
+  List<int>? conversationListStatuses,
   String userRole = 'student',
   void Function(http.Request request)? onAssistantChat,
   Map<String, dynamic> Function(http.Request request)? onPlacementResearch,
@@ -81,6 +85,7 @@ MockClient _fakeBackend({
         in conversationsSeed ?? const <Map<String, dynamic>>[])
       Map<String, dynamic>.from(conversation),
   ];
+  final conversationStatuses = [...?conversationListStatuses];
   final transportRoute = <String, dynamic>{
     'id': '1234567890abcdef12345678',
     'route_number': 'TEST-1',
@@ -302,11 +307,27 @@ MockClient _fakeBackend({
       }
       return _json(demo ? _demoTimetable : _unlinkedTimetable);
     }
+    if (request.method == 'GET' && path == '/lost-found/my-reports') {
+      if (auth != 'Bearer $_fakeToken') {
+        return _json({'detail': 'Not authenticated'}, 401);
+      }
+      return _json({'items': <Map<String, dynamic>>[], 'total': 0});
+    }
     if (path == '/assistant/conversations') {
       if (auth != 'Bearer $_fakeToken') {
         return _json({'detail': 'Not authenticated'}, 401);
       }
-      if (request.method == 'GET') return _json(assistantConversations);
+      if (request.method == 'GET') {
+        if (conversationStatuses.isNotEmpty) {
+          final status = conversationStatuses.removeAt(0);
+          if (status != 200) {
+            return _json({
+              'detail': 'Conversation service unavailable',
+            }, status);
+          }
+        }
+        return _json(assistantConversations);
+      }
       if (request.method == 'POST') {
         final id =
             'assistant-conversation-${assistantConversations.length + 1}';
@@ -353,6 +374,9 @@ MockClient _fakeBackend({
               ? 1
               : 3,
           'created_at': DateTime.now().toUtc().toIso8601String(),
+          if (body['reflection'] is String &&
+              (body['reflection'] as String).trim().isNotEmpty)
+            'reflection': (body['reflection'] as String).trim(),
           if (body['mood'] == 'low' || body['mood'] == 'very_low')
             'support_message': 'This check-in is not a diagnosis. Consider reaching out to someone you trust.',
         };
@@ -400,6 +424,13 @@ MockClient _fakeBackend({
         return _json({
           'questions': [
             {'question': 'Complete the statement: ____', 'answer': 'local'},
+          ],
+        });
+      }
+      if (request.method == 'POST' && path.endsWith('/flashcards')) {
+        return _json({
+          'flashcards': [
+            {'front': 'What is a tree?', 'back': 'A data structure.'},
           ],
         });
       }
@@ -688,9 +719,44 @@ const _demoTimetable = {
 
 void main() {
   group('ApiService', () {
-    test('uses the USB-reversed host URL by default', () {
+    test('uses host loopback on Windows by default', () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
       expect(ApiConfig.baseUrl, 'http://127.0.0.1:8000');
     });
+
+    test('uses the Android Emulator host by default on Android', () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
+      expect(ApiConfig.baseUrl, 'http://10.0.2.2:8000');
+    });
+
+    test(
+      'login sends the FastAPI request contract to the configured URL',
+      () async {
+        late http.Request sentRequest;
+        final api = ApiService(
+          tokenStorage: FakeTokenStorage(),
+          baseUrl: 'http://10.0.2.2:8000',
+          client: MockClient((request) async {
+            sentRequest = request;
+            return _json({'access_token': _fakeToken, 'token_type': 'bearer'});
+          }),
+        );
+
+        await api.login(email: 'asha@example.com', password: 'secret123');
+
+        expect(sentRequest.method, 'POST');
+        expect(sentRequest.url, Uri.parse('http://10.0.2.2:8000/login'));
+        expect(sentRequest.headers['Content-Type'], 'application/json');
+        expect(jsonDecode(sentRequest.body), {
+          'email': 'asha@example.com',
+          'password': 'secret123',
+        });
+      },
+    );
 
     test('login returns the access token', () async {
       final api = ApiService(
@@ -873,6 +939,97 @@ void main() {
         ),
       );
     });
+
+    test(
+      'Lost and Found methods use the FastAPI report and claim contract',
+      () async {
+        final requests = <http.Request>[];
+        final api = ApiService(
+          tokenStorage: FakeTokenStorage(_fakeToken),
+          client: MockClient((request) async {
+            requests.add(request);
+            if (request.url.path == '/lost-found/my-reports') {
+              return _json({'items': [], 'total': 0});
+            }
+            if (request.url.path == '/lost-found/') {
+              return _json({'id': 'report-1'}, 201);
+            }
+            if (request.url.path == '/lost-found/report-1/matches') {
+              return _json({'items': [], 'high_confidence': []});
+            }
+            if (request.url.path == '/lost-found/matches/match-1/request') {
+              return _json({
+                'id': 'claim-1',
+                'verification_status': 'pending',
+              }, 201);
+            }
+            if (request.url.path == '/lost-found/claims/incoming') {
+              return _json({'items': []});
+            }
+            if (request.url.path == '/lost-found/images/test.png') {
+              return http.Response.bytes([137, 80, 78, 71], 200);
+            }
+            if (request.url.path.endsWith('/review')) {
+              return _json({'verification_status': 'approved'});
+            }
+            if (request.url.path == '/lost-found/report-1/close') {
+              return _json({'status': 'closed'});
+            }
+            return _json({'detail': 'Not Found'}, 404);
+          }),
+        );
+
+        expect(await api.getLostFoundReports(), isEmpty);
+        await api.createLostFoundReport({
+          'report_type': 'lost',
+          'item_name': 'Blue backpack',
+          'image': {
+            'name': 'item.png',
+            'type': 'image/png',
+            'size': 8,
+            'data': 'iVBORw0KGgo=',
+          },
+        });
+        await api.getLostFoundMatches('report-1');
+        await api.requestLostFoundMatch('match-1');
+        expect(await api.getIncomingLostFoundClaims(), isEmpty);
+        await api.reviewLostFoundClaim(
+          matchId: 'match-1',
+          claimId: 'claim-1',
+          decision: 'approved',
+        );
+        await api.updateLostFoundStatus(reportId: 'report-1', status: 'close');
+        expect(await api.getLostFoundImage('/api/lost-found/images/test.png'), [
+          137,
+          80,
+          78,
+          71,
+        ]);
+
+        expect(
+          requests.map((request) => '${request.method} ${request.url.path}'),
+          [
+            'GET /lost-found/my-reports',
+            'POST /lost-found/',
+            'GET /lost-found/report-1/matches',
+            'POST /lost-found/matches/match-1/request',
+            'GET /lost-found/claims/incoming',
+            'PATCH /lost-found/matches/match-1/claims/claim-1/review',
+            'PATCH /lost-found/report-1/close',
+            'GET /lost-found/images/test.png',
+          ],
+        );
+        expect(
+          requests.every(
+            (request) =>
+                request.headers['Authorization'] == 'Bearer $_fakeToken',
+          ),
+          isTrue,
+        );
+        final createBody = jsonDecode(requests[1].body) as Map<String, dynamic>;
+        expect((createBody['image'] as Map)['type'], 'image/png');
+      },
+    );
   });
 
   group('Attendance & timetable API', () {
@@ -1107,6 +1264,12 @@ void main() {
       expect(find.text('CGPA'), findsOneWidget);
       expect(find.text('Assignments'), findsOneWidget);
       expect(find.text('Study streak'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Mood and wellbeing'),
+        250,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Mood and wellbeing'), findsOneWidget);
     });
   });
 
@@ -1454,10 +1617,11 @@ void main() {
     Widget buildApp(
       FakeTokenStorage storage, {
       List<Map<String, dynamic>>? students,
+      String userRole = 'student',
     }) {
       final api = ApiService(
         tokenStorage: storage,
-        client: _fakeBackend(students: students),
+        client: _fakeBackend(students: students, userRole: userRole),
       );
       return SmartCampusApp(
         api: api,
@@ -1523,11 +1687,9 @@ void main() {
       expect(find.text('Incorrect email or password'), findsOneWidget);
     });
 
-    testWidgets('login opens the dashboard and the student directory works', (
-      tester,
-    ) async {
+    testWidgets('faculty can open the student directory', (tester) async {
       final storage = FakeTokenStorage();
-      await tester.pumpWidget(buildApp(storage));
+      await tester.pumpWidget(buildApp(storage, userRole: 'faculty'));
       await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
 
@@ -1544,6 +1706,7 @@ void main() {
 
       expect(storage.token, _fakeToken);
       expect(find.text('Welcome, Asha!'), findsOneWidget);
+      expect(find.text('Lost & Found'), findsNothing);
 
       await tester.tap(
         find.descendant(
@@ -1558,6 +1721,88 @@ void main() {
       expect(find.text('Semester 1'), findsOneWidget);
     });
 
+    testWidgets('students can open Lost and Found, not the directory', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(FakeTokenStorage(_fakeToken), students: []),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Students'), findsNothing);
+      expect(find.text('Lost & Found'), findsOneWidget);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('Lost & Found'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Lost and Found'), findsOneWidget);
+      expect(
+        find.byKey(const Key('lost_found_report_type_filter')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('lost_found_search')), findsOneWidget);
+    });
+
+    testWidgets('admin login opens admin tools only', (tester) async {
+      await tester.pumpWidget(buildApp(FakeTokenStorage(), userRole: 'admin'));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('login_email')),
+        'asha@example.com',
+      );
+      await tester.enterText(
+        find.byKey(const Key('login_password')),
+        'secret123',
+      );
+      await tester.tap(find.byKey(const Key('login_submit')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Admin Console'), findsOneWidget);
+      expect(find.text('Faculty Portal'), findsNothing);
+      await tester.scrollUntilVisible(
+        find.text('Mood and wellbeing'),
+        250,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Aggregate wellbeing analytics'), findsOneWidget);
+    });
+
+    testWidgets('faculty login opens faculty tools only', (tester) async {
+      await tester.pumpWidget(
+        buildApp(FakeTokenStorage(), userRole: 'faculty'),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('login_email')),
+        'asha@example.com',
+      );
+      await tester.enterText(
+        find.byKey(const Key('login_password')),
+        'secret123',
+      );
+      await tester.tap(find.byKey(const Key('login_submit')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Faculty Portal'), findsOneWidget);
+      expect(find.text('Mark Attendance'), findsOneWidget);
+      expect(find.text('Lost & Found'), findsNothing);
+      await tester.scrollUntilVisible(
+        find.text('Mood and wellbeing'),
+        250,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Aggregate wellbeing analytics'), findsOneWidget);
+      expect(find.text('Admin Console'), findsNothing);
+    });
+
     testWidgets(
       'saved session opens the dashboard; sign out returns to login',
       (tester) async {
@@ -1567,15 +1812,6 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Welcome, Asha!'), findsOneWidget);
-
-        await tester.tap(
-          find.descendant(
-            of: find.byType(NavigationBar),
-            matching: find.text('Students'),
-          ),
-        );
-        await tester.pumpAndSettle();
-        expect(find.text('No students yet'), findsOneWidget);
 
         await tester.tap(
           find.descendant(
@@ -1744,6 +1980,103 @@ void main() {
 
       expect(sentBody?['mode'], 'study');
     });
+
+    test(
+      'assistant API preserves mode, placement, mood and study contracts',
+      () async {
+        final requests = <http.Request>[];
+        final api = ApiService(
+          tokenStorage: FakeTokenStorage(_fakeToken),
+          client: MockClient((request) async {
+            requests.add(request);
+            if (request.url.path == '/assistant/conversations') {
+              return request.method == 'GET'
+                  ? _json(<Map<String, dynamic>>[])
+                  : _json({'id': 'conversation-1', 'mode': 'study'});
+            }
+            if (request.url.path == '/assistant/chat') {
+              return _json({
+                'reply': 'Grounded response',
+                'mode': 'placement',
+                'conversation_id': 'conversation-1',
+                'suggestions': ['Next question'],
+                'sources': ['placement profile'],
+              });
+            }
+            if (request.url.path == '/assistant/mood/check-ins') {
+              return _json({'id': 'mood-1', 'mood': 'good'});
+            }
+            if (request.url.path ==
+                '/assistant/study/documents/document-1/flashcards') {
+              return _json({
+                'flashcards': [
+                  {'front': 'What is a tree?', 'back': 'A data structure.'},
+                ],
+              });
+            }
+            return _json({'detail': 'Not found'}, 404);
+          }),
+        );
+
+        expect(
+          await api.listAssistantConversations(mode: 'placement'),
+          isEmpty,
+        );
+        expect(
+          (await api.createAssistantConversation(mode: 'study'))['mode'],
+          'study',
+        );
+        final chat = await api.askAssistant(
+          'Plan my preparation',
+          mode: 'placement',
+          conversationId: 'conversation-1',
+          placementContext: {
+            'company': 'Example Corp',
+            'role': 'Analyst',
+            'salary': 'Confidential',
+            'current_skills': ['Python'],
+            'skills_to_improve': ['SQL'],
+            'preparation_level': 'beginner',
+            'application_timeline': '3 months',
+          },
+        );
+        expect(chat['reply'], 'Grounded response');
+        expect(chat['suggestions'], ['Next question']);
+        expect(
+          (await api.createMoodCheckIn(
+            'good',
+            reflection: 'I feel prepared.',
+          ))['mood'],
+          'good',
+        );
+        expect(
+          (await api.createStudyFlashcards('document-1'))['flashcards'],
+          hasLength(1),
+        );
+
+        expect(requests[0].url.queryParameters, {'mode': 'placement'});
+        expect(requests[1].url.queryParameters, {'mode': 'study'});
+        final chatBody = jsonDecode(requests[2].body) as Map<String, dynamic>;
+        expect(chatBody['conversation_id'], 'conversation-1');
+        expect(chatBody['placement_context'], {
+          'company': 'Example Corp',
+          'role': 'Analyst',
+          'salary': 'Confidential',
+          'current_skills': ['Python'],
+          'skills_to_improve': ['SQL'],
+          'preparation_level': 'beginner',
+          'application_timeline': '3 months',
+        });
+        expect(jsonDecode(requests[3].body), {
+          'mood': 'good',
+          'reflection': 'I feel prepared.',
+        });
+        expect(
+          requests.map((request) => request.headers['Authorization']),
+          everyElement('Bearer $_fakeToken'),
+        );
+      },
+    );
 
     test(
       'placement research sends optional job details and external consent',
@@ -1915,8 +2248,12 @@ void main() {
 
         await api.uploadStudyDocument(fixture);
         await api.uploadPlacementDocument(fixture);
+        await api.uploadStudyDocumentBytes(
+          Uint8List.fromList('Study Buddy upload test fixture'.codeUnits),
+          'study_material.txt',
+        );
 
-        expect(requests, hasLength(2));
+        expect(requests, hasLength(3));
         for (final request in requests) {
           expect(request, isA<http.Request>());
           expect(request.headers['Authorization'], 'Bearer $_fakeToken');
@@ -1931,6 +2268,7 @@ void main() {
         expect(requests.map((request) => request.url.path), [
           '/assistant/study/documents',
           '/assistant/placement/documents',
+          '/assistant/study/documents',
         ]);
       },
     );
@@ -1966,6 +2304,7 @@ void main() {
       String userRole = 'student',
       List<Map<String, dynamic>>? conversationsSeed,
       List<Map<String, dynamic>>? studyDocumentsSeed,
+      List<int>? conversationListStatuses,
       void Function(http.Request request)? onAssistantChat,
       Map<String, dynamic> Function(http.Request request)? onPlacementResearch,
     }) async {
@@ -1976,6 +2315,7 @@ void main() {
           userRole: userRole,
           conversationsSeed: conversationsSeed,
           studyDocumentsSeed: studyDocumentsSeed,
+          conversationListStatuses: conversationListStatuses,
           onAssistantChat: onAssistantChat,
           onPlacementResearch: onPlacementResearch,
         ),
@@ -2014,6 +2354,82 @@ void main() {
         expect(find.text('ATTENDANCE'), findsOneWidget);
       },
     );
+
+    testWidgets('assistant responses copy and failed requests can be retried', (
+      tester,
+    ) async {
+      final copiedTexts = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copiedTexts.add(
+              (call.arguments as Map<Object?, Object?>)['text'] as String,
+            );
+          }
+          return null;
+        },
+      );
+      var chatRequests = 0;
+      await tester.pumpWidget(
+        await wrap(
+          const CampusAssistantScreen(),
+          onAssistantChat: (_) {
+            chatRequests++;
+            if (chatRequests == 1) {
+              throw http.ClientException('Test network interruption');
+            }
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Copy response').first);
+      await tester.pumpAndSettle();
+      expect(copiedTexts, hasLength(1));
+      expect(copiedTexts.single, contains('AI Campus Assistant'));
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byType(TextField).first,
+        'What is my attendance percentage?',
+      );
+      await tester.tap(find.byTooltip('Send'));
+      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(find.text('Try again'), findsOneWidget);
+
+      await tester.tap(find.text('Try again'));
+      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(chatRequests, 2);
+      expect(find.textContaining('77.6%'), findsOneWidget);
+      expect(find.text('Try again'), findsNothing);
+
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    });
+
+    testWidgets('assistant history errors are visible and can be retried', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        await wrap(
+          const CampusAssistantScreen(),
+          conversationListStatuses: [503, 200],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Conversation history unavailable'), findsOneWidget);
+      expect(find.text('Conversation service unavailable'), findsOneWidget);
+      await tester.tap(find.text('Retry'));
+      await tester.pumpAndSettle();
+      expect(find.text('Conversation history unavailable'), findsNothing);
+    });
 
     testWidgets(
       'assistant mode changes isolate conversations and legacy chats default to general',
@@ -2145,13 +2561,20 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Add PDF, DOCX or TXT'), findsOneWidget);
         await tester.ensureVisible(find.text('Add PDF, DOCX or TXT'));
-        await tester.ensureVisible(find.text('study_material.txt'));
+        await tester.ensureVisible(find.text('study_material.txt').first);
         expect(find.text('A private study document summary.'), findsOneWidget);
-        await tester.tap(
-          find.byTooltip('Generate quiz for study_material.txt'),
-        );
+        await tester.tap(find.text('Practice quiz'));
         await tester.pumpAndSettle();
         expect(find.text('Complete the statement: ____'), findsOneWidget);
+        await tester.tap(find.text('Close'));
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.text('Flashcards'));
+        await tester.tap(find.text('Flashcards'));
+        await tester.pumpAndSettle();
+        expect(find.text('What is a tree?'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('study_flashcard')));
+        await tester.pumpAndSettle();
+        expect(find.text('A data structure.'), findsOneWidget);
         await tester.tap(find.text('Close'));
         await tester.pumpAndSettle();
         await tester.ensureVisible(find.byTooltip('Delete study_material.txt'));
@@ -2268,6 +2691,38 @@ void main() {
       await tester.tap(find.text('Add PDF, DOCX or TXT'));
       await tester.pumpAndSettle();
       expect(find.text('Documents must be 5 MB or smaller.'), findsOneWidget);
+    });
+
+    testWidgets('assistant document upload supports browser file bytes', (
+      tester,
+    ) async {
+      final bytes = Uint8List.fromList('Browser study material'.codeUnits);
+      await tester.pumpWidget(
+        await wrap(
+          CampusAssistantScreen(
+            filePicker: () async => AssistantPickedDocument(
+              name: 'study_material.txt',
+              size: bytes.length,
+              path: null,
+              bytes: bytes,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Study Buddy'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Add PDF, DOCX or TXT'));
+      await tester.tap(find.text('Add PDF, DOCX or TXT'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('study_material.txt'), findsWidgets);
+      expect(
+        find.text(
+          'This platform did not provide readable file data for upload.',
+        ),
+        findsNothing,
+      );
     });
 
     testWidgets(
@@ -2396,7 +2851,7 @@ void main() {
         await tester.pumpWidget(await wrap(const NotificationsScreen()));
         await tester.pumpAndSettle();
 
-        expect(find.text('Attendance Notices'), findsOneWidget);
+        expect(find.text('Notifications'), findsOneWidget);
         expect(find.text('Low Attendance Warning: MCA403'), findsOneWidget);
         expect(find.textContaining('72.22%'), findsNWidgets(2));
         expect(find.textContaining('Min: 75.0%'), findsOneWidget);
