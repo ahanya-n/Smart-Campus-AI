@@ -1,10 +1,8 @@
-import 'package:flutter/foundation.dart';
-
 /// Backend connection settings.
 ///
-/// Browser and desktop clients use host loopback. Android Emulator uses the
-/// host alias. Physical Android devices must override this with the computer's
-/// reachable LAN address using `--dart-define=API_BASE_URL=...`.
+/// Browser and desktop clients use host loopback. Physical Android devices use
+/// host loopback with `adb reverse`; Android Emulator builds can override this
+/// with `--dart-define=API_BASE_URL=http://10.0.2.2:8000`.
 class ApiConfig {
   ApiConfig._();
 
@@ -14,9 +12,6 @@ class ApiConfig {
 
   static String get baseUrl {
     if (_configuredBaseUrl.isNotEmpty) return _configuredBaseUrl;
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:8000';
-    }
     return 'http://127.0.0.1:8000';
   }
 

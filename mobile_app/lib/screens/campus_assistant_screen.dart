@@ -1898,29 +1898,56 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
       ('mood', 'Mood Detector'),
     ];
     final visibleOptions = isStudent ? options : [options.first];
+    final modeChips = visibleOptions.map((option) {
+      final (value, label) = option;
+      return Tooltip(
+        message: label,
+        child: ChoiceChip(
+          label: Text(label),
+          selected: _selectedMode == value,
+          onSelected: _loading
+              ? null
+              : (_) {
+                  FocusManager.instance.primaryFocus?.unfocus();
+                  _selectMode(value);
+                },
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+      );
+    }).toList();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('Assistant mode', style: Theme.of(context).textTheme.labelLarge),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: visibleOptions.map((option) {
-              final (value, label) = option;
-              return Tooltip(
-                message: label,
-                child: ChoiceChip(
-                  label: Text(label),
-                  selected: _selectedMode == value,
-                  onSelected: _loading ? null : (_) => _selectMode(value),
-                  side: BorderSide(color: scheme.outlineVariant),
-                ),
-              );
-            }).toList(),
-          ),
+          const SizedBox(height: 4),
+          if (MediaQuery.sizeOf(context).width < 430)
+            DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                key: const Key('assistant_mode_selector'),
+                value: _selectedMode,
+                isExpanded: true,
+                items: visibleOptions
+                    .map(
+                      (option) => DropdownMenuItem(
+                        value: option.$1,
+                        child: Text(option.$2),
+                      ),
+                    )
+                    .toList(),
+                onChanged: _loading
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          FocusManager.instance.primaryFocus?.unfocus();
+                          _selectMode(value);
+                        }
+                      },
+              ),
+            )
+          else
+            Wrap(spacing: 8, runSpacing: 4, children: modeChips),
         ],
       ),
     );
@@ -2373,11 +2400,14 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
         const SizedBox(height: 8),
         Row(
           children: [
-            Text(
-              'Your study documents',
-              style: Theme.of(context).textTheme.titleSmall,
+            Expanded(
+              child: Text(
+                'Your study documents',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
             ),
-            const Spacer(),
             IconButton(
               tooltip: 'Refresh study documents',
               onPressed: _studyDocumentsLoading ? null : _loadStudyDocuments,
@@ -2485,22 +2515,30 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final isStudent = AppScope.of(context).auth.user?.isStudent == true;
+    final compact = MediaQuery.sizeOf(context).width < 430;
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final modePanelMaxHeight = (MediaQuery.sizeOf(context).height * 0.3)
+        .clamp(120.0, 200.0)
+        .toDouble();
 
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('AI Campus Assistant'),
-            Text(
-              'Grounded Official Records',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: scheme.primary,
-                fontWeight: FontWeight.w600,
+        title: compact
+            ? const Text('AI Assistant')
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('AI Campus Assistant'),
+                  Text(
+                    'Grounded Official Records',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: scheme.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ],
-        ),
         actions: [
           PopupMenuButton<String>(
             tooltip: 'Select Day for Query',
@@ -2519,62 +2557,138 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
                 .map((d) => PopupMenuItem(value: d, child: Text(d)))
                 .toList(),
           ),
-          IconButton(
-            tooltip: 'Clear Chat',
-            icon: const Icon(Icons.delete_sweep_outlined),
-            onPressed: _clearConversation,
-          ),
-          IconButton(
-            tooltip: 'New Conversation',
-            icon: const Icon(Icons.add_comment_outlined),
-            onPressed: _newConversation,
-          ),
-          IconButton(
-            tooltip: 'Read Latest Response',
-            icon: const Icon(Icons.volume_up_outlined),
-            onPressed: _speakLatestResponse,
-          ),
-          PopupMenuButton<String>(
-            tooltip: 'More assistant options',
-            icon: const Icon(Icons.more_vert),
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'mood',
-                child: ListTile(
-                  leading: Icon(Icons.favorite_border),
-                  title: Text('Mood and wellbeing (private)'),
-                  contentPadding: EdgeInsets.zero,
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'complaint',
-                child: ListTile(
-                  leading: Icon(Icons.report_outlined),
-                  title: Text('Prepare Complaint'),
-                  contentPadding: EdgeInsets.zero,
-                ),
-              ),
-              if (isStudent)
+          if (!compact)
+            IconButton(
+              tooltip: 'Clear Chat',
+              icon: const Icon(Icons.delete_sweep_outlined),
+              onPressed: _clearConversation,
+            ),
+          if (!compact)
+            IconButton(
+              tooltip: 'New Conversation',
+              icon: const Icon(Icons.add_comment_outlined),
+              onPressed: _newConversation,
+            ),
+          if (!compact)
+            IconButton(
+              tooltip: 'Read Latest Response',
+              icon: const Icon(Icons.volume_up_outlined),
+              onPressed: _speakLatestResponse,
+            ),
+          if (compact)
+            PopupMenuButton<String>(
+              tooltip: 'More assistant options',
+              icon: const Icon(Icons.more_vert),
+              itemBuilder: (context) => [
                 const PopupMenuItem(
-                  value: 'placement',
+                  value: 'clear',
                   child: ListTile(
-                    leading: Icon(Icons.school_outlined),
-                    title: Text('Placement Practice'),
+                    leading: Icon(Icons.delete_sweep_outlined),
+                    title: Text('Clear chat'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
-            ],
-            onSelected: (value) {
-              switch (value) {
-                case 'mood':
-                  _openMoodScreen();
-                case 'complaint':
-                  _prepareComplaint();
-                case 'placement':
-                  _startPlacementPractice();
-              }
-            },
-          ),
+                const PopupMenuItem(
+                  value: 'new',
+                  child: ListTile(
+                    leading: Icon(Icons.add_comment_outlined),
+                    title: Text('New conversation'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'speak',
+                  child: ListTile(
+                    leading: Icon(Icons.volume_up_outlined),
+                    title: Text('Read latest response'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'mood',
+                  child: ListTile(
+                    leading: Icon(Icons.favorite_border),
+                    title: Text('Mood and wellbeing (private)'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'complaint',
+                  child: ListTile(
+                    leading: Icon(Icons.report_outlined),
+                    title: Text('Prepare Complaint'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                if (isStudent)
+                  const PopupMenuItem(
+                    value: 'placement',
+                    child: ListTile(
+                      leading: Icon(Icons.school_outlined),
+                      title: Text('Placement Practice'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+              ],
+              onSelected: (value) {
+                switch (value) {
+                  case 'clear':
+                    _clearConversation();
+                  case 'new':
+                    _newConversation();
+                  case 'speak':
+                    _speakLatestResponse();
+                  case 'mood':
+                    _openMoodScreen();
+                  case 'complaint':
+                    _prepareComplaint();
+                  case 'placement':
+                    _startPlacementPractice();
+                }
+              },
+            ),
+          if (!compact)
+            PopupMenuButton<String>(
+              tooltip: 'More assistant options',
+              icon: const Icon(Icons.more_vert),
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'mood',
+                  child: ListTile(
+                    leading: Icon(Icons.favorite_border),
+                    title: Text('Mood and wellbeing (private)'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'complaint',
+                  child: ListTile(
+                    leading: Icon(Icons.report_outlined),
+                    title: Text('Prepare Complaint'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                if (isStudent)
+                  const PopupMenuItem(
+                    value: 'placement',
+                    child: ListTile(
+                      leading: Icon(Icons.school_outlined),
+                      title: Text('Placement Practice'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+              ],
+              onSelected: (value) {
+                switch (value) {
+                  case 'mood':
+                    _openMoodScreen();
+                  case 'complaint':
+                    _prepareComplaint();
+                  case 'placement':
+                    _startPlacementPractice();
+                }
+              },
+            ),
           PopupMenuButton<String>(
             tooltip: 'Saved Conversations',
             icon: const Icon(Icons.history),
@@ -2601,64 +2715,72 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
       ),
       body: Column(
         children: [
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 210),
-            child: SingleChildScrollView(
-              child: Column(
-                children: [
-                  _buildModePicker(isStudent, scheme),
-                  _buildModeNotice(scheme),
-                  if (_conversationError != null)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-                      child: Card(
-                        margin: EdgeInsets.zero,
-                        child: ListTile(
-                          leading: Icon(
-                            Icons.history_toggle_off,
-                            color: scheme.error,
-                          ),
-                          title: const Text('Conversation history unavailable'),
-                          subtitle: Text(_conversationError!),
-                          trailing: TextButton(
-                            onPressed: _loadConversations,
-                            child: const Text('Retry'),
+          _buildModePicker(isStudent, scheme),
+          if (!keyboardOpen)
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: modePanelMaxHeight),
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    _buildModeNotice(scheme),
+                    if (_conversationError != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                        child: Card(
+                          margin: EdgeInsets.zero,
+                          child: ListTile(
+                            leading: Icon(
+                              Icons.history_toggle_off,
+                              color: scheme.error,
+                            ),
+                            title: const Text(
+                              'Conversation history unavailable',
+                            ),
+                            subtitle: Text(_conversationError!),
+                            trailing: TextButton(
+                              onPressed: _loadConversations,
+                              child: const Text('Retry'),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-          // Suggested questions quick scroll
-          Container(
-            height: 48,
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainerHighest.withValues(alpha: 0.3),
-              border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
-            ),
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              itemCount: _suggestionsForMode().length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (context, index) {
-                final question = _suggestionsForMode()[index];
-                return ActionChip(
-                  label: Text(
-                    question,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: scheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w500,
+          if (!keyboardOpen)
+            Container(
+              height: 48,
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                border: Border(
+                  bottom: BorderSide(color: scheme.outlineVariant),
+                ),
+              ),
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                itemCount: _suggestionsForMode().length,
+                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                itemBuilder: (context, index) {
+                  final question = _suggestionsForMode()[index];
+                  return ActionChip(
+                    label: Text(
+                      question,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                  ),
-                  onPressed: _loading ? null : () => _sendMessage(question),
-                );
-              },
+                    onPressed: _loading ? null : () => _sendMessage(question),
+                  );
+                },
+              ),
             ),
-          ),
 
           // Chat message list
           Expanded(
@@ -2703,6 +2825,7 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
               border: Border(top: BorderSide(color: scheme.outlineVariant)),
             ),
             child: SafeArea(
+              top: false,
               child: Row(
                 children: [
                   Expanded(
@@ -2711,7 +2834,7 @@ class _CampusAssistantScreenState extends State<CampusAssistantScreen> {
                       textInputAction: TextInputAction.send,
                       onSubmitted: _sendMessage,
                       decoration: InputDecoration(
-                        hintText: 'Ask about your academics or timetable...',
+                        hintText: 'Message the assistant…',
                         hintStyle: TextStyle(
                           fontSize: 14,
                           color: scheme.onSurfaceVariant.withValues(alpha: 0.7),

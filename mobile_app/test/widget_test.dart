@@ -726,11 +726,11 @@ void main() {
       expect(ApiConfig.baseUrl, 'http://127.0.0.1:8000');
     });
 
-    test('uses the Android Emulator host by default on Android', () {
+    test('uses host loopback by default on Android for USB reverse', () {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       addTearDown(() => debugDefaultTargetPlatformOverride = null);
 
-      expect(ApiConfig.baseUrl, 'http://10.0.2.2:8000');
+      expect(ApiConfig.baseUrl, 'http://127.0.0.1:8000');
     });
 
     test(
@@ -1270,6 +1270,36 @@ void main() {
         scrollable: find.byType(Scrollable).first,
       );
       expect(find.text('Mood and wellbeing'), findsOneWidget);
+    });
+
+    testWidgets('student dashboard fits a narrow phone viewport', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final storage = FakeTokenStorage(_fakeToken);
+      final api = ApiService(tokenStorage: storage, client: _fakeBackend());
+      await tester.pumpWidget(
+        SmartCampusApp(
+          api: api,
+          auth: AuthController(api: api, tokenStorage: storage),
+        ),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      expect(find.text('CGPA'), findsOneWidget);
+      expect(find.text('Study streak'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('AI Campus Assistant'),
+        150,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('AI Campus Assistant'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 
@@ -2354,6 +2384,48 @@ void main() {
         expect(find.text('ATTENDANCE'), findsOneWidget);
       },
     );
+
+    testWidgets('assistant controls fit narrow screens and keyboard insets', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(await wrap(const CampusAssistantScreen()));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('assistant_mode_selector')), findsOneWidget);
+      expect(find.byTooltip('Saved Conversations'), findsOneWidget);
+      expect(find.byTooltip('More assistant options'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.byKey(const Key('assistant_mode_selector')));
+      await tester.pumpAndSettle();
+      expect(find.text('General Campus Assistant'), findsWidgets);
+      expect(find.text('Placement Assistant'), findsOneWidget);
+      expect(find.text('Study Buddy'), findsOneWidget);
+      expect(find.text('Mood Detector'), findsOneWidget);
+      await tester.tap(find.text('Study Buddy'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Add PDF, DOCX or TXT'));
+      expect(
+        find.textContaining('Supported: PDF, DOCX, TXT; maximum 5 MB.'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+
+      tester.view.viewInsets = const FakeViewPadding(bottom: 280);
+      addTearDown(tester.view.resetViewInsets);
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Send'), findsOneWidget);
+      expect(
+        tester.getRect(find.byTooltip('Send')).bottom,
+        lessThanOrEqualTo(520),
+      );
+      expect(tester.takeException(), isNull);
+    });
 
     testWidgets('assistant responses copy and failed requests can be retried', (
       tester,

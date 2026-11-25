@@ -64,8 +64,8 @@ mobile_app/    Flutter application, Android configuration, and tests
 - `backend_node/` is the Express API for the portal. It connects lazily to MongoDB.
 - `backend/` is the FastAPI service used by the Flutter app and also exposes
   additional assistant and academic workflows.
-- `mobile_app/` is the Flutter client. The Android emulator reaches the host
-  FastAPI service at `10.0.2.2:8000`.
+- `mobile_app/` is the Flutter client. Android devices reach the host FastAPI
+  service through USB reverse forwarding or a configured LAN address.
 - Both backend implementations use MongoDB collections with compatible student, user, attendance, and timetable document shapes. Keep local work isolated to `smart_campus_test`.
 
 ### Web frontend
@@ -87,8 +87,8 @@ process; start the API that the chosen client is configured to use.
 
 `mobile_app/` contains the Flutter/Dart client, Android project configuration,
 authentication and secure token storage, API services, role-aware dashboards,
-and screens for the implemented campus workflows. Its API URL is configurable
-with `API_BASE_URL`; Android emulators use the host alias `10.0.2.2`.
+and screens for the implemented campus workflows. Every API feature uses the
+same API URL, configurable with the `API_BASE_URL` Dart define.
 
 ## Prerequisites
 
@@ -208,17 +208,39 @@ flutter run -d chrome
 flutter run -d windows
 ```
 
-Android Emulator defaults to `http://10.0.2.2:8000`. A physical Android device
-must use the computer's LAN IP and the FastAPI server must be reachable on that
-network:
+For a physical Android device connected over USB, start FastAPI on all
+interfaces and enable ADB reverse forwarding. Enable forwarding again after
+reconnecting the phone or restarting ADB:
 
 ```powershell
-flutter run -d <device-id> --dart-define=API_BASE_URL=http://<COMPUTER_LAN_IP>:8000
+Set-Location .\backend
+..\.venv\Scripts\python.exe -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# In a second terminal opened at the repository root:
+$adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+& $adb devices
+& $adb reverse tcp:8000 tcp:8000
+& $adb reverse --list
+Invoke-RestMethod http://127.0.0.1:8000/health
+& $adb shell am start -a android.intent.action.VIEW -d http://127.0.0.1:8000/health
+Set-Location .\mobile_app
+flutter run -d <device-id> --dart-define=API_BASE_URL=http://127.0.0.1:8000
 ```
 
-The Android cleartext exception is present only in the debug manifest; release
-builds retain Android's HTTPS-only default. FastAPI allows CORS only from local
-HTTP loopback origins needed by Flutter Web's development server.
+The phone-side loopback URL is `http://127.0.0.1:8000` while reverse forwarding
+is active. The health URL opened above should display the FastAPI JSON response
+on the phone. Android Emulator builds use the separate host alias:
+
+```powershell
+flutter run -d <emulator-id> --dart-define=API_BASE_URL=http://10.0.2.2:8000
+```
+
+Chrome and Windows continue to use `http://127.0.0.1:8000` by default. For
+phone-over-Wi-Fi development, set `API_BASE_URL` to the computer's LAN IP and
+allow that connection through the local firewall. The Android cleartext
+exception is present only in the debug manifest; release builds retain
+Android's HTTPS-only default. FastAPI allows CORS only from local HTTP loopback
+origins needed by Flutter Web's development server.
 
 ## Environment variable names
 

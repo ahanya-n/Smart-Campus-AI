@@ -432,39 +432,46 @@ class _StudentDashboardOverview extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        GridView(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            mainAxisSpacing: 10,
-            crossAxisSpacing: 10,
-            mainAxisExtent: 112,
-          ),
-          children: [
-            _DashboardKpi(
-              label: 'Attendance',
-              value: attendancePercentage == null
-                  ? '—'
-                  : '$attendancePercentage%',
-              detail: dashboard?['is_demo'] == true ? 'Demo data' : 'Official',
-            ),
-            _DashboardKpi(
-              label: 'CGPA',
-              value: cgpa == null ? '—' : cgpa.toString(),
-              detail: 'Calculated demo equivalent',
-            ),
-            _DashboardKpi(
-              label: 'Assignments',
-              value: '${assignments['pending'] ?? 0}',
-              detail: '${assignments['submitted'] ?? 0} submitted',
-            ),
-            _DashboardKpi(
-              label: 'Study streak',
-              value: '$studyStreak days',
-              detail: 'Recent present records',
-            ),
-          ],
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = constraints.maxWidth < 300 ? 1 : 2;
+            return GridView(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: columns,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                mainAxisExtent: 132,
+              ),
+              children: [
+                _DashboardKpi(
+                  label: 'Attendance',
+                  value: attendancePercentage == null
+                      ? '—'
+                      : '$attendancePercentage%',
+                  detail: dashboard?['is_demo'] == true
+                      ? 'Demo data'
+                      : 'Official',
+                ),
+                _DashboardKpi(
+                  label: 'CGPA',
+                  value: cgpa == null ? '—' : cgpa.toString(),
+                  detail: 'Calculated demo equivalent',
+                ),
+                _DashboardKpi(
+                  label: 'Assignments',
+                  value: '${assignments['pending'] ?? 0}',
+                  detail: '${assignments['submitted'] ?? 0} submitted',
+                ),
+                _DashboardKpi(
+                  label: 'Study streak',
+                  value: '$studyStreak days',
+                  detail: 'Recent present records',
+                ),
+              ],
+            );
+          },
         ),
         const SizedBox(height: 12),
         Card(
@@ -580,12 +587,19 @@ class _DashboardKpi extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: theme.textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.w800,
               ),
             ),
             const SizedBox(height: 4),
-            Text(detail, style: theme.textTheme.bodySmall),
+            Text(
+              detail,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall,
+            ),
           ],
         ),
       ),
@@ -909,7 +923,10 @@ class _AssistantHeroCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 2,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         Text(
                           'AI Campus Assistant',
@@ -917,7 +934,6 @@ class _AssistantHeroCard extends StatelessWidget {
                             fontWeight: FontWeight.w800,
                           ),
                         ),
-                        const SizedBox(width: 6),
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,

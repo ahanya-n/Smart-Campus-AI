@@ -84,6 +84,9 @@ class _HomeShellState extends State<HomeShell> {
           body: IndexedStack(index: visibleIndex, children: children),
           bottomNavigationBar: NavigationBar(
             selectedIndex: visibleIndex,
+            labelBehavior: MediaQuery.sizeOf(context).width < 380
+                ? NavigationDestinationLabelBehavior.onlyShowSelected
+                : NavigationDestinationLabelBehavior.alwaysShow,
             onDestinationSelected: (index) =>
                 _select(destinationIds.elementAt(index)),
             destinations: destinations,

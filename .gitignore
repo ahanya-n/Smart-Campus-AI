@@ -58,6 +58,7 @@ build/
 SMART_CAMPUS_FINAL_RUN_AND_CREDENTIALS_GUIDE.md
 
 # Local data and generated uploads
+/password/
 /backend/realistic-demo-credentials.local.json
 /backend_node/uploads/
 dump/
